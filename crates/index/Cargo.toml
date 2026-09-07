@@ -1,0 +1,25 @@
+[package]
+name = "dualpane-index"
+description = "Headless directory listing and indexing pipeline for Commander"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+crossbeam-channel.workspace = true
+dualpane-core.workspace = true
+dualpane-vfs.workspace = true
+notify.workspace = true
+nucleo.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

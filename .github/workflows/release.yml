@@ -1,0 +1,242 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag to release (for example, v0.3.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+      commit: ${{ steps.metadata.outputs.commit }}
+      toolchain: ${{ steps.metadata.outputs.toolchain }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - name: Check version and maintainer
+        id: metadata
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          RELEASE_MAINTAINER: ${{ vars.RELEASE_MAINTAINER }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re, subprocess, tomllib
+
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version']
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?', version) or tag != f'v{version}':
+              raise SystemExit(f'::error::Tag {tag!r} must match workspace version v{version}')
+          if not re.fullmatch(r'[^<>\r\n]+ <[^<>\s]+@[^<>\s]+>', os.environ['RELEASE_MAINTAINER']):
+              raise SystemExit('::error::Set the repository Actions variable RELEASE_MAINTAINER to Name <email>')
+          toolchain = tomllib.loads(pathlib.Path('rust-toolchain.toml').read_text())['toolchain']['channel']
+          if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', toolchain):
+              raise SystemExit('::error::Release builds require a pinned Rust toolchain version')
+          commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              for key, value in {'tag': tag, 'version': version, 'commit': commit, 'toolchain': toolchain,
+                                 'prerelease': str('-' in version).lower()}.items():
+                  output.write(f'{key}={value}\n')
+          PY
+
+  build:
+    name: Build Linux ${{ matrix.arch }}
+    needs: validate
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            nfpm_arch: x86_64
+            nfpm_sha256: 0660ca602b2d2d2ae4781a06c692b3eeb9d437ffea05b831d76e41f4a3188783
+            linuxdeploy_sha256: c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            nfpm_arch: arm64
+            nfpm_sha256: 1c0f5f2999b9a974bfb04fdb0cc3306096de530ac5dbb25d739cc5f5219c919c
+            linuxdeploy_sha256: 620095110d693282b8ebeb244a95b5e911cf8f65f76c88b4b47d16ae6346fcff
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      RUSTUP_TOOLCHAIN: ${{ needs.validate.outputs.toolchain }}
+      RELEASE_MAINTAINER: ${{ vars.RELEASE_MAINTAINER }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - name: Install native and packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config binutils curl ca-certificates python3 \
+            libgtk-4-dev libadwaita-1-dev librsvg2-dev libgdk-pixbuf-2.0-dev \
+            libpango1.0-dev libglib2.0-bin libgdk-pixbuf2.0-bin \
+            adwaita-icon-theme hicolor-icon-theme shared-mime-info \
+            file findutils desktop-file-utils zstd xvfb xauth dbus-x11
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy --component rustfmt
+      - name: Install verified packaging tools
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+          NFPM_ARCH: ${{ matrix.nfpm_arch }}
+          NFPM_SHA256: ${{ matrix.nfpm_sha256 }}
+          LINUXDEPLOY_SHA256: ${{ matrix.linuxdeploy_sha256 }}
+          NFPM_VERSION: '2.47.0'
+          LINUXDEPLOY_VERSION: '1-alpha-20251107-1'
+        run: |
+          tools_dir="$RUNNER_TEMP/release-tools"
+          mkdir -p "$tools_dir"
+          curl --fail --show-error --location --retry 3 --proto '=https' \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_${NFPM_ARCH}.tar.gz" \
+            --output "$tools_dir/nfpm.tar.gz"
+          printf '%s  %s\n' "$NFPM_SHA256" "$tools_dir/nfpm.tar.gz" | sha256sum --check -
+          tar -xzf "$tools_dir/nfpm.tar.gz" -C "$tools_dir" nfpm
+          curl --fail --show-error --location --retry 3 --proto '=https' \
+            "https://github.com/linuxdeploy/linuxdeploy/releases/download/${LINUXDEPLOY_VERSION}/linuxdeploy-${PACKAGE_ARCH}.AppImage" \
+            --output "$tools_dir/linuxdeploy"
+          printf '%s  %s\n' "$LINUXDEPLOY_SHA256" "$tools_dir/linuxdeploy" | sha256sum --check -
+          chmod +x "$tools_dir/nfpm" "$tools_dir/linuxdeploy"
+          printf '%s\n' "$tools_dir" >> "$GITHUB_PATH"
+      - name: Check formatting, lint, and test
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --workspace --locked
+          python3 -B -m unittest discover -s packaging -p 'test_release.py'
+      - name: Build all release formats
+        run: |
+          python3 release.py --check --output dist/release
+          python3 release.py --output dist/release
+      - name: Verify checksums and smoke-test AppImage
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          GDK_BACKEND: x11
+          GSK_RENDERER: cairo
+        run: |
+          (cd dist/release && sha256sum --check SHA256SUMS)
+          appimage="$GITHUB_WORKSPACE/dist/release/commander-${RELEASE_VERSION}-1-${PACKAGE_ARCH}.AppImage"
+          timeout 60s "$appimage" --version
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/smoke/config"
+          export XDG_CACHE_HOME="$RUNNER_TEMP/smoke/cache"
+          export XDG_DATA_HOME="$RUNNER_TEMP/smoke/data"
+          mkdir -p "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$RUNNER_TEMP/smoke/input"
+          printf 'Release smoke test\n' > "$RUNNER_TEMP/smoke/input/example.txt"
+          timeout 60s xvfb-run -a dbus-run-session -- "$appimage" \
+            --benchmark "$RUNNER_TEMP/smoke/input" --quit-after-first-paint
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/release/*
+          if-no-files-found: error
+          overwrite: true
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs: [validate, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+      PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+    steps:
+      - name: Download both architecture builds
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: linux-*
+          path: downloaded
+      - name: Verify and collect release assets
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, shutil, subprocess
+
+          destination = pathlib.Path('release-assets')
+          destination.mkdir()
+          for arch in ('x86_64', 'aarch64'):
+              source = pathlib.Path('downloaded') / f'linux-{arch}'
+              subprocess.run(['sha256sum', '--check', 'SHA256SUMS'], cwd=source, check=True)
+              metadata = json.loads((source / 'release.json').read_text())
+              if (metadata['version'] != os.environ['RELEASE_VERSION'] or metadata['architecture'] != arch
+                      or set(metadata['formats']) != {'deb', 'rpm', 'arch', 'appimage'}):
+                  raise SystemExit(f'Unexpected release metadata for {arch}')
+              for suffix in ('.deb', '.rpm', '.pkg.tar.zst', '.AppImage'):
+                  matches = list(source.glob(f'*{suffix}'))
+                  if len(matches) != 1 or not matches[0].stat().st_size:
+                      raise SystemExit(f'Expected one nonempty {suffix} for {arch}')
+                  target = destination / matches[0].name
+                  if target.exists():
+                      raise SystemExit(f'Duplicate release asset: {target.name}')
+                  shutil.copyfile(matches[0], target)
+              shutil.copyfile(source / 'release.json', destination / f'release-{arch}.json')
+          with (destination / 'SHA256SUMS').open('w') as checksums:
+              for asset in sorted(destination.iterdir()):
+                  if asset.name == 'SHA256SUMS':
+                      continue
+                  with asset.open('rb') as stream:
+                      digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+                  checksums.write(f'{digest}  {asset.name}\n')
+          PY
+      - name: Create release and attach packages
+        run: |
+          remote_commit=$(gh api "repos/$GH_REPO/commits/$RELEASE_TAG" --jq .sha)
+          if [[ "$remote_commit" != "$RELEASE_COMMIT" ]]; then
+            echo '::error::The release tag moved after validation; refusing to publish different source.'
+            exit 1
+          fi
+          if gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft > "$RUNNER_TEMP/release-is-draft"; then
+            if [[ "$(cat "$RUNNER_TEMP/release-is-draft")" != true ]]; then
+              echo 'Release is already published; existing assets are unchanged.'
+              exit 0
+            fi
+          else
+            flags=()
+            if [[ "$PRERELEASE" == true ]]; then
+              flags+=(--prerelease)
+            fi
+            gh release create "$RELEASE_TAG" --verify-tag --draft --generate-notes \
+              --title "Commander $RELEASE_TAG" "${flags[@]}"
+          fi
+          # A failed upload leaves a draft which a rerun can finish.
+          gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease="$PRERELEASE"
+          gh release view "$RELEASE_TAG" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"

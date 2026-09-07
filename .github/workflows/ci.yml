@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  headless:
+    name: Headless workspace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: clippy,rustfmt
+      - name: Install native UI dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev xvfb
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Lint all targets
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Run workspace tests
+        run: cargo test --workspace --locked
+      - name: Build GTK-free headless crates
+        run: cargo check -p dualpane-core -p dualpane-vfs -p dualpane-engine -p dualpane-index
+      - name: Generate the flat 100k-entry fixture
+        run: cargo xtask gen-fixtures --root target/ci-fixtures/flat-100k --files 100000 --files-per-directory 100000
+      - name: Compile Criterion performance suites
+        run: cargo bench --package dualpane-benches --no-run --locked
+      - name: Enforce M1 release performance budgets
+        run: cargo xtask check-m1-budgets --root target/ci-fixtures/flat-100k/bucket-000000
+      - name: Build release application
+        run: cargo build --release --package dualpane-app --locked
+      - name: Smoke-test native shell under Xvfb
+        run: timeout 30s xvfb-run -a target/release/commander --benchmark target/ci-fixtures/flat-100k/bucket-000000 --quit-after-first-paint
+
+  msrv:
+    name: MSRV 1.96
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96.0
+      - name: Check GTK-free crates on the declared MSRV
+        run: cargo check -p dualpane-core -p dualpane-vfs -p dualpane-engine -p dualpane-index

@@ -1,0 +1,2674 @@
+@define-color carelo_void #14161a;
+@define-color carelo_sidebar #191b20;
+@define-color carelo_toolbar #202227;
+@define-color carelo_pane #202227;
+@define-color carelo_footer #202227;
+@define-color carelo_control #2b2e35;
+/* Dividers follow the foreground across every palette and appearance mode. */
+@define-color carelo_separator alpha(@carelo_text, 0.08);
+@define-color carelo_hairline rgba(255, 255, 255, 0.08);
+@define-color carelo_text #e7e9ee;
+@define-color carelo_muted #b0b6c0;
+@define-color carelo_faint #8c94a0;
+@define-color carelo_icon #a0a8b4;
+@define-color carelo_accent #528bff;
+@define-color carelo_hover rgba(255, 255, 255, 0.045);
+@define-color carelo_zebra alpha(@carelo_text, 0.025);
+@define-color carelo_selected alpha(@carelo_accent, 0.20);
+@define-color carelo_selected_text @carelo_text;
+/* Text on a solid accent fill; palettes with pastel accents flip this to dark. */
+@define-color carelo_on_accent #ffffff;
+@define-color carelo_menu @carelo_toolbar;
+@define-color carelo_menu_control @carelo_control;
+@define-color carelo_menu_border @carelo_hairline;
+@define-color carelo_menu_separator alpha(@carelo_menu_text, 0.08);
+@define-color carelo_menu_text @carelo_text;
+@define-color carelo_menu_muted @carelo_muted;
+@define-color carelo_menu_faint @carelo_faint;
+@define-color carelo_menu_icon @carelo_icon;
+
+/* ---------------------------------------------------------------------------
+   libadwaita bridge
+   Adwaita declares its palette as custom properties on :root and resolves them
+   from named colours, so re-pointing them at the Carelo palette themes every
+   platform surface at once -- dialogs, popovers, header bars, entries, switches.
+   These follow the runtime Omarchy palette for free, because @carelo_* does.
+   --------------------------------------------------------------------------- */
+
+:root {
+  --window-bg-color: @carelo_pane;
+  --window-fg-color: @carelo_text;
+  /* Dialogs sit one step above the window, the way the toolbar does. */
+  --dialog-bg-color: @carelo_toolbar;
+  --dialog-fg-color: @carelo_text;
+  --headerbar-bg-color: @carelo_toolbar;
+  --headerbar-fg-color: @carelo_text;
+  --headerbar-border-color: @carelo_separator;
+  --headerbar-backdrop-color: @carelo_footer;
+  --popover-bg-color: @carelo_toolbar;
+  --popover-fg-color: @carelo_text;
+  --view-bg-color: @carelo_pane;
+  --view-fg-color: @carelo_text;
+  --card-bg-color: @carelo_control;
+  --card-fg-color: @carelo_text;
+  --sidebar-bg-color: @carelo_sidebar;
+  --sidebar-fg-color: @carelo_text;
+  --sidebar-border-color: @carelo_separator;
+  --accent-bg-color: @carelo_accent;
+  --accent-color: @carelo_accent;
+  --accent-fg-color: @carelo_on_accent;
+  --border-color: @carelo_hairline;
+}
+
+window,
+.app-shell {
+  color: @carelo_text;
+  background: @carelo_pane;
+  font-family: "Inter", "Cantarell", sans-serif;
+  font-size: 13px;
+}
+
+.app-main {
+  background: @carelo_pane;
+}
+
+button {
+  border: 0;
+}
+
+button:focus-visible {
+  outline: 2px solid alpha(@carelo_accent, 0.78);
+  outline-offset: -2px;
+}
+
+/* Reset native separator borders and shadows so each divider is one flat line. */
+separator {
+  min-width: 1px;
+  min-height: 1px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: @carelo_separator;
+  background: @carelo_separator;
+  box-shadow: none;
+  opacity: 1;
+}
+
+.carelo-toolbar {
+  min-height: 0;
+  padding: 0;
+  border-bottom: 1px solid @carelo_separator;
+  background: @carelo_toolbar;
+}
+
+.toolbar-title {
+  min-width: 0;
+  margin-left: 0;
+  color: @carelo_text;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.toolbar-icon,
+.breadcrumb-icon {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 4px;
+  color: @carelo_icon;
+  background: transparent;
+  box-shadow: none;
+  transition: background 90ms ease-out, color 90ms ease-out;
+}
+
+.toolbar-icon {
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+.toolbar-icon:hover,
+.breadcrumb-icon:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.toolbar-icon:checked {
+  color: @carelo_accent;
+  background: alpha(@carelo_accent, 0.12);
+}
+
+.toolbar-icon:disabled {
+  opacity: 0.35;
+}
+
+.toolbar-search {
+  min-width: 0;
+  min-height: 30px;
+  margin: 0;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  color: @carelo_text;
+  background: alpha(@carelo_text, 0.045);
+  box-shadow: none;
+  font-size: 12px;
+}
+
+.toolbar-search image {
+  color: @carelo_faint;
+  -gtk-icon-size: 14px;
+}
+
+.toolbar-search text placeholder,
+.toolbar-search placeholder {
+  color: @carelo_faint;
+}
+
+.toolbar-search:hover {
+  background: alpha(@carelo_text, 0.08);
+}
+
+.toolbar-search:focus-within {
+  background: alpha(@carelo_text, 0.07);
+  box-shadow: inset 0 0 0 1px alpha(@carelo_accent, 0.55);
+}
+
+/* The compact bar keeps every menu and gives filtering its own row. */
+.toolbar-primary {
+  min-height: 46px;
+  padding: 0 8px;
+}
+.toolbar-location {
+  min-width: 0;
+  min-height: 30px;
+  margin: 7px 0;
+  padding: 0 8px;
+  border-radius: 4px;
+}
+.toolbar-location:hover { background: @carelo_hover; }
+.toolbar-filter-row { padding: 0 10px 8px; }
+.toolbar-primary .toolbar-search { min-width: 180px; margin: 7px 6px; }
+.toolbar-search.has-filter { box-shadow: inset 0 0 0 1px alpha(@carelo_accent, 0.65); }
+menubutton.topbar-menu > button {
+  min-height: 32px;
+  min-width: 30px;
+  margin: 6px 0;
+  padding: 0 7px;
+  border-radius: 4px;
+  color: @carelo_muted;
+  background: transparent;
+  box-shadow: none;
+}
+.compact-topbar menubutton.topbar-menu > button {
+  min-width: 16px;
+  padding: 0 6px;
+}
+menubutton.topbar-menu > button:hover { background: @carelo_hover; }
+menubutton.topbar-menu > button:checked { background: alpha(@carelo_accent, 0.12); }
+.topbar-menu image { -gtk-icon-size: 16px; }
+.topbar-menu label,
+.sort-dropdown popover label { font-size: 12px; font-weight: 500; }
+popover contents {
+  border: 1px solid @carelo_menu_border;
+  border-radius: 6px;
+  background: @carelo_menu;
+  box-shadow: none;
+}
+.topbar-popover,
+.sort-dropdown popover { font-family: "Inter", "Cantarell", sans-serif; }
+.topbar-popover contents,
+.sort-dropdown popover contents { padding: 7px; }
+popover separator {
+  color: @carelo_menu_separator;
+  background: @carelo_menu_separator;
+}
+popover separator.horizontal { margin: 4px 6px; }
+popover separator.vertical { margin: 6px 4px; }
+.topbar-menu-heading {
+  margin: 7px 9px 5px;
+  color: @carelo_muted;
+  font-size: 11px;
+  font-weight: 600;
+}
+.topbar-option,
+.sort-dropdown popover row {
+  min-height: 32px;
+  padding: 4px 9px;
+  border-radius: 4px;
+  color: @carelo_text;
+  background: transparent;
+  box-shadow: none;
+}
+.topbar-option:hover,
+.sort-dropdown popover row:hover { background: @carelo_hover; }
+.topbar-option:checked,
+.sort-dropdown popover row:selected {
+  background: alpha(@carelo_accent, 0.12);
+  color: @carelo_text;
+}
+.topbar-option image,
+.sort-dropdown popover row image { -gtk-icon-size: 16px; }
+.topbar-option:focus-visible,
+.sort-dropdown popover row:focus-visible,
+menubutton.topbar-menu > button:focus-visible,
+.toolbar-location:focus-visible { outline: 2px solid alpha(@carelo_accent, 0.55); outline-offset: -2px; }
+
+.toolbar-spinner {
+  margin-left: 6px;
+  color: @carelo_faint;
+}
+
+.workspace {
+  background: @carelo_pane;
+}
+
+paned > separator:hover {
+  background-color: alpha(@carelo_text, 0.16);
+}
+
+/* ---------------------------------------------------------------------------
+   Sidebar
+   Hierarchy comes from weight and contrast, not saturation: icons stay neutral
+   so the accent means exactly one thing — this is where you are.
+   --------------------------------------------------------------------------- */
+
+.sidebar-surface {
+  min-width: 250px;
+  border-right: 1px solid @carelo_separator;
+  background: @carelo_sidebar;
+}
+
+/* Matches the toolbar's height so the two columns share one baseline. */
+.sidebar-window-region {
+  min-height: 46px;
+  padding-left: 12px;
+  border-bottom: 0;
+}
+
+.toolbar-window-controls {
+  margin: 0 4px;
+}
+
+/* Monochrome window actions share the toolbar's flat controls. */
+.window-action {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 4px;
+  color: @carelo_faint;
+  background: transparent;
+  box-shadow: none;
+}
+.window-action image { -gtk-icon-size: 14px; }
+.window-action:hover { color: @carelo_text; background: @carelo_hover; }
+.window-close:hover { color: #ffffff; background: #bc3543; }
+
+.sidebar-scroll-content {
+  padding: 4px 10px 10px 10px;
+}
+
+/* Slim overlay scrollbar: the sidebar is narrow, the track should not cost width. */
+.sidebar-scroller scrollbar {
+  background: transparent;
+  border: 0;
+}
+
+/* Recolour only. The platform slider stays thin by painting inside a transparent
+   border (`background-clip: padding-box`); the `background` shorthand would reset that
+   clip and fatten the bar, so set the colour alone. */
+.sidebar-scroller scrollbar slider {
+  background-color: alpha(@carelo_text, 0.16);
+}
+
+.sidebar-scroller scrollbar slider:hover {
+  background-color: alpha(@carelo_text, 0.3);
+}
+
+.sidebar-heading-row {
+  margin: 11px 0 1px 0;
+}
+
+.sidebar-heading {
+  min-height: 22px;
+  margin: 12px 0 2px;
+  padding: 0 9px;
+  color: @carelo_muted;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.sidebar-heading-row .sidebar-heading {
+  margin: 0;
+}
+
+/* The first section sits directly under the header; it needs no leading air. */
+.sidebar-scroll-content > .sidebar-heading:first-child,
+.sidebar-scroll-content > .sidebar-heading-row:first-child {
+  margin-top: 2px;
+}
+
+/* Section actions are always present but nearly silent until you reach for them. */
+.sidebar-heading-action {
+  min-width: 24px;
+  min-height: 24px;
+  margin-right: 4px;
+  padding: 0;
+  border-radius: 4px;
+  color: @carelo_faint;
+  background: transparent;
+}
+
+.sidebar-heading-action:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.sidebar-row {
+  min-height: 32px;
+  padding: 0 9px;
+  border-radius: 4px;
+  color: @carelo_muted;
+  font-size: 12px;
+  font-weight: 400;
+  background: transparent;
+  box-shadow: none;
+}
+
+.sidebar-row image {
+  color: alpha(@carelo_icon, 0.9);
+  transition: color 90ms ease-out;
+}
+
+.sidebar-row:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.sidebar-row:hover image {
+  color: @carelo_text;
+}
+
+.sidebar-row:active {
+  background: alpha(@carelo_text, 0.11);
+}
+
+/* The current location. The one place the accent is spent. */
+.sidebar-row-active {
+  color: @carelo_text;
+  font-weight: 600;
+  background: alpha(@carelo_accent, 0.15);
+}
+
+.sidebar-row-active image,
+.sidebar-row-active:hover image {
+  color: @carelo_accent;
+}
+
+.sidebar-row-active:hover {
+  background: alpha(@carelo_accent, 0.22);
+}
+
+/* An unmounted drive reads as available-but-not-here. */
+.sidebar-row-unmounted {
+  color: @carelo_faint;
+}
+
+.sidebar-row-unmounted image {
+  color: alpha(@carelo_icon, 0.55);
+}
+
+.sidebar-row.file-drop-target {
+  color: @carelo_text;
+  background: alpha(@carelo_accent, 0.2);
+  outline: 2px solid @carelo_accent;
+  outline-offset: -2px;
+}
+
+.sidebar-row.file-drop-target image {
+  color: @carelo_accent;
+}
+
+.sidebar-empty {
+  margin: 1px 9px 3px 9px;
+  color: alpha(@carelo_faint, 0.85);
+  font-size: 11px;
+}
+
+/* Trash sits outside the scroll area so it is always one click away. */
+.sidebar-pinned {
+  padding: 5px 10px;
+  border-top: 1px solid @carelo_separator;
+}
+
+.sidebar-workspace-row {
+  min-height: 30px;
+}
+
+.pane {
+  border-top: 0;
+  background: @carelo_pane;
+  font-family: monospace;
+}
+
+.pane-inactive .file-list row:selected,
+.pane-inactive .column-browser row:selected,
+.pane-inactive .file-grid child:selected {
+  color: @carelo_muted;
+  background: alpha(@carelo_accent, 0.22);
+}
+
+.pane-tabs {
+  min-height: 28px;
+  padding: 3px 8px;
+  border-bottom: 1px solid @carelo_separator;
+  background: @carelo_pane;
+}
+
+.pane-tab {
+  min-width: 110px;
+  min-height: 24px;
+  padding: 0;
+  border: 1px solid alpha(@carelo_text, 0.06);
+  border-radius: 6px;
+  color: @carelo_faint;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  box-shadow: none;
+}
+
+.pane-tab:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.pane-tab-active {
+  color: @carelo_text;
+  border-color: alpha(@carelo_text, 0.12);
+  background: @carelo_control;
+  box-shadow: none;
+}
+
+.pane-active .pane-tab-active { border-color: alpha(@carelo_text, 0.18); }
+
+.pane-tab-tagged {
+  color: @carelo_muted;
+}
+
+.pane-tab-tag-red { background: alpha(#ff5c57, 0.18); }
+.pane-tab-tag-orange { background: alpha(#ff9f43, 0.18); }
+.pane-tab-tag-yellow { background: alpha(#ffd166, 0.18); }
+.pane-tab-tag-green { background: alpha(#45d483, 0.18); }
+.pane-tab-tag-blue { background: alpha(#4ba3ff, 0.18); }
+.pane-tab-tag-purple { background: alpha(#b78cff, 0.18); }
+
+.pane-tab-tag-red:hover { background: alpha(#ff5c57, 0.26); }
+.pane-tab-tag-orange:hover { background: alpha(#ff9f43, 0.26); }
+.pane-tab-tag-yellow:hover { background: alpha(#ffd166, 0.26); }
+.pane-tab-tag-green:hover { background: alpha(#45d483, 0.26); }
+.pane-tab-tag-blue:hover { background: alpha(#4ba3ff, 0.26); }
+.pane-tab-tag-purple:hover { background: alpha(#b78cff, 0.26); }
+
+.pane-tab-tag-red.pane-tab-active { background: alpha(#ff5c57, 0.34); }
+.pane-tab-tag-orange.pane-tab-active { background: alpha(#ff9f43, 0.34); }
+.pane-tab-tag-yellow.pane-tab-active { background: alpha(#ffd166, 0.34); }
+.pane-tab-tag-green.pane-tab-active { background: alpha(#45d483, 0.34); }
+.pane-tab-tag-blue.pane-tab-active { background: alpha(#4ba3ff, 0.34); }
+.pane-tab-tag-purple.pane-tab-active { background: alpha(#b78cff, 0.34); }
+
+.pane-tab-tagged.pane-tab-active {
+  color: @carelo_text;
+}
+
+.tab-select {
+  min-width: 76px;
+  min-height: 24px;
+  padding: 0 6px 0 8px;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  box-shadow: none;
+}
+
+.tab-select:hover,
+.tab-select:active {
+  color: inherit;
+  background: transparent;
+  box-shadow: none;
+}
+
+.tab-close {
+  min-width: 18px;
+  min-height: 18px;
+  margin-right: 6px;
+  padding: 0;
+  border-radius: 3px;
+  color: @carelo_faint;
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.45;
+}
+
+.pane-tab:hover .tab-close,
+.pane-tab-active .tab-close,
+.tab-close:focus-visible {
+  opacity: 1;
+}
+
+.tab-close image,
+.terminal-tab-close image { -gtk-icon-size: 12px; }
+
+.tab-close:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.pane-toolbar {
+  min-height: 34px;
+  padding: 2px 8px;
+  border-bottom: 1px solid @carelo_separator;
+}
+
+.path-entry {
+  min-height: 27px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: @carelo_muted;
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  box-shadow: none;
+}
+
+.path-entry:hover {
+  background: @carelo_hover;
+}
+
+.path-entry:focus-within {
+  border-color: alpha(@carelo_accent, 0.48);
+  background: rgba(0, 0, 0, 0.16);
+  box-shadow: 0 0 0 2px alpha(@carelo_accent, 0.14);
+}
+
+.path-entry image {
+  color: @carelo_accent;
+}
+
+.breadcrumbs {
+  min-height: 28px;
+  padding: 0 3px;
+}
+
+.breadcrumb-button {
+  min-height: 26px;
+  padding: 0 6px;
+  border-radius: 6px;
+  color: @carelo_muted;
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  box-shadow: none;
+}
+
+.breadcrumb-button:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.breadcrumb-separator {
+  color: @carelo_faint;
+  font-size: 13px;
+}
+
+.sidebar-remove {
+  min-width: 24px;
+  min-height: 30px;
+  padding: 0;
+  border-radius: 4px;
+  color: alpha(@carelo_faint, 0.75);
+  background: transparent;
+}
+
+.sidebar-remove:hover {
+  color: #ff6b68;
+  background: @carelo_hover;
+}
+
+.favorite-group-heading {
+  min-height: 27px;
+  margin-top: 4px;
+  padding: 0 7px 0 10px;
+  color: @carelo_muted;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.favorite-group-action {
+  min-width: 22px;
+  min-height: 24px;
+  padding: 0;
+  color: @carelo_faint;
+  background: transparent;
+}
+
+.favorite-group-empty {
+  padding: 0 10px 4px 20px;
+  font-size: 10px;
+}
+
+.context-menu-heading {
+  padding: 4px 10px 2px;
+  color: @carelo_menu_faint;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.context-menu contents {
+  min-width: 210px;
+  padding: 6px;
+  border: 1px solid @carelo_menu_border;
+  border-radius: 4px;
+  color: @carelo_menu_text;
+  background-color: @carelo_menu;
+  box-shadow: none;
+}
+
+.sort-control {
+  min-height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.sort-dropdown {
+  min-width: 70px;
+  min-height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.sort-dropdown > button {
+  min-height: 26px;
+  padding: 0 5px 0 8px;
+  border: 0;
+  border-radius: 6px;
+  color: @carelo_muted;
+  font-size: 11px;
+  font-weight: 600;
+  background: transparent;
+  box-shadow: none;
+}
+
+.sort-dropdown > button:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.sort-dropdown > button:focus-visible {
+  color: @carelo_text;
+  background: alpha(@carelo_accent, 0.09);
+  box-shadow: inset 0 0 0 1px alpha(@carelo_accent, 0.35);
+}
+
+.sort-dropdown arrow {
+  min-width: 10px;
+  margin-left: 3px;
+  color: @carelo_faint;
+  -gtk-icon-size: 10px;
+}
+
+.sort-dropdown popover listview {
+  padding: 0;
+  background: transparent;
+}
+
+.sort-dropdown popover row + row { margin-top: 2px; }
+
+.sort-direction {
+  min-width: 24px;
+  min-height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  color: @carelo_icon;
+  background: transparent;
+  box-shadow: none;
+}
+
+.sort-direction image {
+  -gtk-icon-size: 12px;
+}
+
+.sort-direction:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.file-view-scroller,
+.file-list,
+.file-grid,
+.column-browser {
+  background: @carelo_pane;
+}
+
+.files-loading {
+  min-height: 28px;
+  padding: 0 11px;
+  border: 1px solid @carelo_hairline;
+  border-radius: 4px;
+  color: @carelo_muted;
+  background: @carelo_control;
+  box-shadow: none;
+}
+
+.files-loading spinner {
+  color: @carelo_accent;
+  -gtk-icon-size: 14px;
+}
+
+.files-loading-label {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.file-list header button {
+  min-height: 30px;
+  padding: 0 8px;
+  border-bottom: 1px solid @carelo_separator;
+  color: @carelo_muted;
+  font-size: 11px;
+  font-weight: 500;
+  background: @carelo_pane;
+  box-shadow: none;
+}
+
+.file-list header label {
+  color: @carelo_muted;
+  font-size: 11px;
+  font-weight: 500;
+}
+.file-grid child { border-radius: 4px; }
+.file-list row {
+  min-height: 32px;
+  padding: 0;
+  border-radius: 0;
+  font-size: 13px;
+}
+
+/* Native row ordering keeps stripes current when GTK reuses or reorders rows.
+   State backgrounds below take precedence over this quiet reading aid. */
+.file-list row:nth-child(even),
+.column-browser row:nth-child(even) {
+  background: @carelo_zebra;
+}
+
+.file-list row:hover,
+.column-browser row:hover {
+  background: @carelo_hover;
+}
+
+.file-drop-target {
+  outline: 2px solid @carelo_accent;
+  outline-offset: -2px;
+  background: alpha(@carelo_accent, 0.18);
+}
+
+.file-drag-source {
+  opacity: 0.62;
+}
+
+.file-list row:selected,
+.column-browser row:selected,
+.file-grid child:selected {
+  color: @carelo_selected_text;
+  background: @carelo_selected;
+}
+
+.pane-active .file-list row:focus,
+.pane-active .file-list row:focus-within,
+.pane-active .column-browser row:focus,
+.pane-active .column-browser row:focus-within,
+.pane-active .file-grid child:focus,
+.pane-active .file-grid child:focus-within {
+  outline: 2px solid alpha(@carelo_accent, 0.88);
+  outline-offset: -2px;
+  background: alpha(@carelo_accent, 0.12);
+}
+
+.file-name-cell image,
+.column-browser-row > image:first-child {
+  color: @carelo_icon;
+}
+
+.file-name-cell.context-directory-target label,
+.file-card.context-directory-target .file-card-name,
+.column-browser-row.context-directory-target label {
+  font-weight: 600;
+}
+
+.file-grid {
+  padding: 20px 18px;
+}
+
+.file-card {
+  min-width: 116px;
+  min-height: 110px;
+  margin: 4px;
+  padding: 14px 10px 10px 10px;
+  border-radius: 4px;
+  color: @carelo_text;
+}
+
+.file-card-icon {
+  min-width: 96px;
+  min-height: 72px;
+  border: 0;
+  border-radius: 4px;
+  color: @carelo_icon;
+  background: transparent;
+}
+
+.file-card-thumbnail {
+  min-width: 96px;
+  min-height: 72px;
+  background: @carelo_void;
+}
+
+.file-card-name {
+  color: @carelo_text;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.file-grid child:selected .file-card-name,
+.file-grid child:selected .file-card-icon {
+  color: @carelo_selected_text;
+}
+
+.tag-indicator {
+  min-width: 10px;
+  min-height: 10px;
+  margin: 0 1px;
+  font-size: 9px;
+  line-height: 10px;
+}
+
+.file-card > .tag-indicator {
+  margin-top: -7px;
+}
+
+.tag-red { color: #ff5c57; }
+.tag-orange { color: #ff9f43; }
+.tag-yellow { color: #ffd166; }
+.tag-green { color: #45d483; }
+.tag-blue { color: #4ba3ff; }
+.tag-purple { color: #b78cff; }
+
+.file-context-menu contents {
+  min-width: 266px;
+  padding: 0;
+  border: 1px solid @carelo_menu_border;
+  border-radius: 4px;
+  color: @carelo_menu_text;
+  background-color: @carelo_menu;
+  box-shadow: none;
+}
+
+.context-menu-search {
+  min-height: 29px;
+  margin: 6px 6px 3px;
+  border: 1px solid @carelo_menu_border;
+  border-radius: 4px;
+  color: @carelo_menu_text;
+  font-size: 11px;
+  background: @carelo_menu_control;
+  box-shadow: none;
+}
+
+.context-menu-search:focus-within {
+  border-color: alpha(@carelo_accent, 0.76);
+  box-shadow: 0 0 0 2px alpha(@carelo_accent, 0.16);
+}
+
+.context-menu-title {
+  min-height: 24px;
+  padding: 0 11px 1px;
+  color: @carelo_menu_muted;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.context-menu-title .dim-label {
+  color: @carelo_menu_faint;
+  font-size: 9px;
+  font-weight: 500;
+}
+
+.context-menu-item {
+  min-height: 28px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: @carelo_menu_text;
+  font-size: 11px;
+  font-weight: 400;
+  background: transparent;
+}
+
+.context-menu-item:hover {
+  background: @carelo_hover;
+  color: @carelo_menu_text;
+}
+
+.context-menu-icon {
+  min-width: 17px;
+  color: @carelo_menu_icon;
+}
+
+.context-menu-item:hover .context-menu-icon {
+  color: @carelo_menu_text;
+}
+
+.context-menu-shortcut {
+  margin-left: 12px;
+  color: @carelo_menu_muted;
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.context-menu-item:hover .context-menu-shortcut {
+  color: @carelo_menu_muted;
+}
+
+.context-menu-item.destructive-action {
+  color: #ff6b66;
+}
+
+.context-menu-item.destructive-action:hover {
+  color: #ffffff;
+  background: #bc3543;
+}
+
+.context-menu-item:disabled {
+  color: @carelo_menu_faint;
+  background: transparent;
+  opacity: 0.55;
+}
+
+.context-menu-item:disabled .context-menu-icon {
+  color: @carelo_menu_faint;
+}
+
+.context-menu-empty {
+  min-height: 56px;
+  padding: 10px;
+  color: @carelo_menu_faint;
+  font-size: 10px;
+}
+
+.context-tag-row {
+  min-height: 30px;
+  margin-top: 3px;
+  padding: 4px 9px 2px;
+  border-top: 1px solid @carelo_menu_separator;
+  color: @carelo_menu_muted;
+  font-size: 10px;
+}
+
+.context-tag-button {
+  min-width: 16px;
+  min-height: 16px;
+  margin: 0 1px;
+  padding: 0;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px @carelo_menu_border;
+}
+
+.tag-swatch-red { background: #ff5c57; }
+.tag-swatch-orange { background: #ff9f43; }
+.tag-swatch-yellow { background: #ffd166; }
+.tag-swatch-green { background: #45d483; }
+.tag-swatch-blue { background: #4ba3ff; }
+.tag-swatch-purple { background: #b78cff; }
+
+.context-tag-clear {
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0;
+}
+
+.column-browser {
+  min-width: 0;
+  padding: 4px 0;
+}
+.column-browser row { padding: 0; }
+
+.column-browser-row {
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 0;
+  color: @carelo_text;
+  font-size: 13px;
+}
+
+.column-browser-chevron {
+  color: @carelo_faint;
+}
+
+.miller-browser {
+  background: @carelo_pane;
+}
+
+.miller-column {
+  border-right: 1px solid @carelo_separator;
+  background: @carelo_pane;
+}
+
+.miller-column-heading {
+  min-height: 34px;
+  padding: 0 12px;
+  border-bottom: 1px solid @carelo_separator;
+  color: @carelo_muted;
+  background: @carelo_pane;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.miller-column-count {
+  color: @carelo_muted;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.miller-current .miller-column-heading {
+  color: @carelo_text;
+  box-shadow: inset 0 -1px alpha(@carelo_accent, 0.60);
+}
+
+.miller-column:not(.miller-current) .column-browser row:selected {
+  background: @carelo_hover;
+  color: @carelo_text;
+}
+
+.miller-current .column-browser row:selected .column-browser-row > image {
+  color: @carelo_selected_text;
+}
+
+.miller-placeholder label {
+  color: @carelo_muted;
+}
+
+.miller-resize-handle {
+  min-width: 5px;
+  background: transparent;
+}
+
+.miller-resize-handle:hover {
+  background: alpha(@carelo_accent, 0.5);
+}
+
+.miller-placeholder {
+  padding: 20px;
+  color: @carelo_faint;
+}
+
+.pane-status {
+  min-height: 26px;
+  padding: 2px 12px;
+  border-top: 1px solid @carelo_separator;
+  color: @carelo_muted;
+  font-size: 11px;
+  background: @carelo_pane;
+}
+
+.preview-panel {
+  min-width: 330px;
+  border-left: 1px solid @carelo_separator;
+  background: @carelo_pane;
+  box-shadow: none;
+}
+
+.inspector-tabs {
+  min-height: 36px;
+  padding: 0 14px;
+  border-bottom: 1px solid @carelo_separator;
+  background: @carelo_pane;
+}
+
+.inspector-tabs-title {
+  color: @carelo_faint;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.inspector-tab {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 6px;
+  color: @carelo_icon;
+  background: transparent;
+}
+
+.inspector-tab:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.inspector-tab:checked {
+  color: @carelo_accent;
+  background: transparent;
+}
+
+.inspector-content {
+  padding-bottom: 36px;
+}
+
+.preview-hero {
+  min-height: 180px;
+  margin: 20px 20px 0;
+  padding: 10px;
+  border-radius: 0;
+  color: @carelo_icon;
+  background: transparent;
+}
+
+.preview-hero image {
+  color: @carelo_icon;
+}
+
+.preview-text {
+  padding: 10px;
+  border-radius: 6px;
+  color: @carelo_muted;
+  background: alpha(@carelo_void, 0.36);
+  font-size: 11px;
+}
+
+.pdf-preview-scroll,
+.pdf-preview-scroll viewport {
+  background: transparent;
+}
+
+.pdf-preview-scroll picture {
+  background: alpha(@carelo_void, 0.22);
+}
+
+.pdf-preview-controls {
+  min-height: 34px;
+  margin-top: 8px;
+  padding: 3px 6px;
+  border: 1px solid alpha(@carelo_hairline, 0.45);
+  border-radius: 4px;
+  background: alpha(@carelo_void, 0.56);
+}
+
+.pdf-preview-button {
+  min-width: 27px;
+  min-height: 27px;
+  padding: 0;
+  border-radius: 6px;
+  color: @carelo_icon;
+  background: transparent;
+  box-shadow: none;
+}
+
+.pdf-preview-button:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.pdf-preview-page {
+  min-width: 42px;
+  color: @carelo_muted;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.inspector-selection-empty {
+  color: @carelo_faint;
+}
+
+.inspector-selection-empty image {
+  color: @carelo_icon;
+}
+
+.inspector-empty-title {
+  color: @carelo_text;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.inspector-empty-copy {
+  color: @carelo_faint;
+  font-size: 11px;
+}
+
+.selection-stack-art {
+  min-width: 104px;
+  min-height: 92px;
+  border: 0;
+  border-radius: 0;
+  color: @carelo_icon;
+  background: transparent;
+  box-shadow: none;
+}
+
+.file-identity {
+  padding: 15px 20px 18px 20px;
+}
+
+.preview-name {
+  color: @carelo_text;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.preview-meta {
+  color: @carelo_faint;
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.inspector-section {
+  margin: 0 18px 16px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.inspector-section-git {
+  border: 0;
+  background: transparent;
+}
+
+.inspector-section-header {
+  padding-right: 0;
+  border-bottom: 1px solid @carelo_separator;
+}
+
+.inspector-section-header .section-title {
+  min-height: 34px;
+  padding: 0;
+  border-bottom: 0;
+  color: @carelo_text;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.git-commit-row {
+  padding-top: 7px;
+  padding-bottom: 8px;
+}
+
+.git-commit-subject {
+  color: @carelo_text;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.git-commit-hash {
+  padding: 0 5px;
+  border-radius: 4px;
+  color: @carelo_muted;
+  background: alpha(@carelo_text, 0.08);
+  font-family: monospace;
+  font-size: 9.5px;
+}
+
+.git-commit-meta {
+  color: @carelo_faint;
+  font-size: 10.5px;
+}
+
+.git-pill-clean {
+  color: @carelo_faint;
+  background: alpha(@carelo_icon, 0.09);
+}
+
+.git-pill-modified {
+  color: #ffb45c;
+  background: alpha(#ff9f43, 0.16);
+}
+
+.git-pill-staged {
+  color: @carelo_accent;
+  background: alpha(@carelo_accent, 0.16);
+}
+
+.git-pill-untracked {
+  color: #5fdc98;
+  background: alpha(#45d483, 0.16);
+}
+
+.git-pill-ignored {
+  color: @carelo_faint;
+  background: alpha(@carelo_icon, 0.06);
+}
+
+.git-pill-conflict {
+  color: #ff7b76;
+  background: alpha(#ff5c57, 0.18);
+}
+
+.section-title {
+  min-height: 34px;
+  padding: 0 10px;
+  border-bottom: 1px solid @carelo_separator;
+  color: @carelo_muted;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.inspector-row {
+  min-height: 30px;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.inspector-key {
+  color: @carelo_faint;
+  font-size: 11px;
+}
+
+.inspector-value {
+  color: @carelo_muted;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.permission-edit-button {
+  min-height: 30px;
+  margin: 9px 10px 10px 10px;
+  padding: 0 11px;
+  border-radius: 4px;
+  color: @carelo_accent;
+  background: alpha(@carelo_accent, 0.09);
+  box-shadow: none;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.permission-edit-button:hover {
+  background: alpha(@carelo_accent, 0.16);
+}
+
+.inspector-page {
+  min-height: 0;
+  background: @carelo_footer;
+}
+
+.inspector-page-actions {
+  min-height: 34px;
+  margin: 10px 14px 0 14px;
+}
+
+.inspector-section-pill {
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
+  color: @carelo_faint;
+  background: alpha(@carelo_icon, 0.09);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.inspector-section-action {
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 6px;
+  color: @carelo_accent;
+  background: transparent;
+  box-shadow: none;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.inspector-section-action:hover {
+  background: alpha(@carelo_accent, 0.1);
+}
+
+.inspector-panel-empty {
+  padding: 24px 28px 34px 28px;
+  color: @carelo_faint;
+  background: transparent;
+  font-size: 11px;
+}
+
+.inspector-panel-empty image {
+  color: @carelo_icon;
+}
+
+.inspector-empty-page {
+  padding: 90px 34px;
+  color: @carelo_faint;
+}
+
+.inspector-empty-page image {
+  color: @carelo_icon;
+}
+
+.operation-progress {
+  min-width: 0;
+  min-height: 3px;
+}
+
+.job-activity {
+  min-height: 24px;
+  padding: 3px 12px;
+  background: @carelo_footer;
+  border-top: 1px solid @carelo_separator;
+  color: @carelo_muted;
+}
+
+.job-activity-title {
+  color: @carelo_muted;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.job-activity-state,
+.job-activity spinner { color: @carelo_faint; }
+
+.job-activity-attention .job-activity-title,
+.job-activity-attention .job-activity-state { color: @carelo_text; }
+
+.job-activity-attention .job-activity-title { font-weight: 500; }
+
+.job-activity-progress {
+  min-width: 72px;
+  min-height: 2px;
+}
+
+.job-activity-progress trough,
+.job-activity-progress progress {
+  min-height: 2px;
+  border-radius: 1px;
+}
+
+.job-activity-progress trough {
+  min-width: 72px;
+  background: alpha(@carelo_text, 0.07);
+}
+
+.job-activity-progress progress {
+  background: alpha(@carelo_accent, 0.65);
+}
+
+.job-activity-action,
+menubutton.job-activity-menu > button {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 4px;
+  color: @carelo_muted;
+  background: transparent;
+  box-shadow: none;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+menubutton.job-activity-menu > button { padding: 0 6px; }
+
+.job-activity-action image,
+menubutton.job-activity-menu image { -gtk-icon-size: 12px; }
+
+.job-activity-action:hover,
+menubutton.job-activity-menu > button:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.job-popover contents,
+.job-popover .operation-list {
+  background: @carelo_toolbar;
+  color: @carelo_text;
+}
+
+.job-popover .operation-path,
+.job-popover .operation-state {
+  color: @carelo_muted;
+}
+
+.operation-progress trough {
+  min-height: 3px;
+  border-radius: 1px;
+  background: alpha(@carelo_text, 0.07);
+}
+
+.operation-progress progress {
+  min-height: 3px;
+  border-radius: 1px;
+  background: alpha(@carelo_accent, 0.65);
+}
+
+.operation-path {
+  color: @carelo_faint;
+  font-size: 11px;
+}
+
+.operation-message {
+  color: @carelo_muted;
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.operation-message-error {
+  color: mix(@carelo_text, #dd5b57, 0.75);
+}
+
+.operation-action {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 4px;
+  color: @carelo_muted;
+  background: transparent;
+  box-shadow: none;
+}
+
+.operation-action image { -gtk-icon-size: 12px; }
+
+.operation-action:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.operation-action-danger:hover {
+  color: #ff6961;
+}
+
+.operation-list {
+  padding: 4px 8px;
+}
+
+.operation-card {
+  padding: 6px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.operation-card + .operation-card {
+  border-top: 1px solid @carelo_separator;
+}
+
+.operation-card spinner { color: @carelo_faint; }
+
+.inspector-log-list {
+  padding: 10px 18px 24px 18px;
+}
+
+.inspector-log-entry {
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 1px solid @carelo_separator;
+  border-radius: 0;
+  background: transparent;
+}
+
+.inspector-log-dot {
+  color: @carelo_accent;
+  font-size: 8px;
+}
+
+.inspector-log-entry.log-success .inspector-log-dot {
+  color: #74c991;
+}
+
+.inspector-log-entry.log-warning .inspector-log-dot {
+  color: #e2b45f;
+}
+
+.inspector-log-entry.log-error .inspector-log-dot {
+  color: #ff6961;
+}
+
+.inspector-log-title {
+  color: @carelo_text;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.inspector-log-time {
+  color: @carelo_faint;
+  font-size: 9.5px;
+}
+
+.inspector-log-detail {
+  color: @carelo_muted;
+  font-size: 10.5px;
+}
+
+.operation-title {
+  color: @carelo_text;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.operation-state {
+  color: @carelo_faint;
+  font-size: 10px;
+}
+
+.command-palette-dialog {
+  background: transparent;
+}
+
+/* The adw sheet only hosts the palette; the palette paints its own surface. */
+dialog.floating.command-palette-dialog > sheet,
+dialog.command-palette-dialog sheet {
+  background: transparent;
+  border-radius: 4px;
+  box-shadow: none;
+  /* Centered allocation plus a bottom margin floats the palette above centre. */
+  margin-bottom: 140px;
+}
+
+.command-palette {
+  border: 1px solid alpha(@carelo_text, 0.09);
+  border-radius: 4px;
+  color: @carelo_text;
+  font-family: "Inter", "Cantarell", sans-serif;
+  background: @carelo_toolbar;
+  box-shadow: none;
+}
+
+.command-palette-header {
+  padding: 8px 12px 8px 16px;
+  border-bottom: 1px solid @carelo_separator;
+}
+
+.command-palette-search,
+.command-palette-search:focus-within {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: @carelo_text;
+  background: transparent;
+  box-shadow: none;
+  font-size: 15px;
+  outline: none;
+}
+
+.command-palette-search image {
+  color: @carelo_faint;
+  margin-right: 8px;
+  -gtk-icon-size: 17px;
+}
+
+.command-palette-search text {
+  caret-color: @carelo_accent;
+}
+
+.command-palette-search text placeholder,
+.command-palette-search placeholder {
+  color: @carelo_faint;
+}
+
+.command-palette-scroll {
+  background: transparent;
+}
+
+.command-palette-scroll scrollbar {
+  margin: 4px 0;
+}
+
+.command-palette-results {
+  padding: 6px 8px 8px;
+}
+
+.command-row {
+  min-height: 38px;
+  padding: 0 10px 0 12px;
+  border-radius: 6px;
+  color: @carelo_text;
+  background: transparent;
+  box-shadow: none;
+  transition: background 90ms ease-out;
+}
+
+.command-row:hover,
+.command-row:focus-visible {
+  background: @carelo_hover;
+  outline: none;
+}
+
+.command-row-selected,
+.command-row-selected:hover {
+  color: @carelo_text;
+  background: alpha(@carelo_accent, 0.16);
+}
+
+.command-row:active {
+  background: alpha(@carelo_accent, 0.22);
+}
+
+.command-row:disabled {
+  opacity: 0.42;
+}
+
+.command-row-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.command-row-detail {
+  color: @carelo_faint;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.command-row-selected .command-row-detail {
+  color: @carelo_muted;
+}
+
+.command-row-keys {
+  margin-left: 12px;
+}
+
+.command-row-key-sep {
+  color: @carelo_faint;
+  font-size: 10px;
+  margin: 0 3px;
+}
+
+.command-key {
+  min-width: 14px;
+  min-height: 18px;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: @carelo_muted;
+  background: alpha(@carelo_text, 0.075);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.command-row-selected .command-key {
+  color: @carelo_text;
+  background: alpha(@carelo_text, 0.11);
+}
+
+.command-palette-empty {
+  min-height: 64px;
+  color: @carelo_faint;
+  font-size: 13px;
+}
+
+.command-palette-footer {
+  padding: 8px 16px 9px;
+  border-top: 1px solid @carelo_separator;
+}
+
+.command-palette-hint {
+  color: @carelo_faint;
+  font-size: 10.5px;
+}
+
+.command-palette-hint .command-key {
+  margin-right: 5px;
+  min-height: 16px;
+  font-size: 9.5px;
+}
+
+.glob-bar {
+  padding: 6px 8px;
+  border-bottom: 1px solid @carelo_separator;
+  background: alpha(@carelo_accent, 0.06);
+}
+
+.preview-text,
+.quick-look-text {
+  padding: 12px;
+  color: @carelo_text;
+  background: @carelo_pane;
+  font-family: monospace;
+  font-size: 11px;
+}
+
+.preview-text text,
+.quick-look-text text {
+  color: @carelo_text;
+  background: transparent;
+}
+
+.preview-content-status {
+  padding: 24px;
+  color: @carelo_faint;
+}
+
+.quick-look-root {
+  color: var(--dialog-fg-color);
+  background: var(--dialog-bg-color);
+}
+
+.quick-look-heading {
+  margin: 4px 0;
+}
+
+.quick-look-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.quick-look-detail {
+  color: color-mix(in srgb, currentColor 50%, transparent);
+  font-size: 11px;
+}
+
+.quick-look-dialog textview,
+.quick-look-dialog textview > text {
+  padding: 12px 16px;
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 3%, transparent);
+  font-family: monospace;
+  font-size: 11.5px;
+}
+
+.quick-look-dialog .quick-look-status {
+  padding: 24px;
+  color: color-mix(in srgb, currentColor 50%, transparent);
+}
+
+/* --- Connect to Server ------------------------------------------------- */
+
+.remote-form { padding-bottom: 8px; }
+.remote-form entry, .remote-form passwordentry, .remote-form dropdown > button { min-height: 30px; }
+.remote-field-label { font-size: 12px; color: alpha(currentColor, 0.72); }
+.remote-form-caption { font-size: 11px; color: alpha(currentColor, 0.55); }
+.remote-auth { margin-top: 4px; }
+
+.remote-list {
+  padding: 0 12px 14px;
+}
+
+.remote-section {
+  padding: 12px 10px 4px;
+}
+
+.remote-section .dialog-eyebrow {
+  margin-top: 0;
+}
+
+.remote-spinner {
+  min-width: 12px;
+  min-height: 12px;
+  color: color-mix(in srgb, currentColor 45%, transparent);
+}
+
+.remote-section-status {
+  color: color-mix(in srgb, currentColor 40%, transparent);
+  font-size: 10.5px;
+}
+
+.remote-row {
+  min-height: 42px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  transition: background 90ms ease-out;
+}
+
+.remote-row:hover,
+.remote-row:focus-visible {
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  outline: none;
+}
+
+.remote-row:active {
+  background: color-mix(in srgb, var(--accent-bg-color) 18%, transparent);
+}
+
+.remote-row-nested {
+  margin-left: 28px;
+  min-height: 36px;
+}
+
+.remote-row-icon {
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.remote-row-title {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.remote-row-subtitle {
+  color: color-mix(in srgb, currentColor 45%, transparent);
+  font-size: 11px;
+}
+
+.remote-badge {
+  padding: 1px 7px;
+  border-radius: 4px;
+  color: color-mix(in srgb, currentColor 60%, transparent);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.remote-empty {
+  padding: 8px 10px 4px;
+  color: color-mix(in srgb, currentColor 45%, transparent);
+  font-size: 12px;
+}
+
+.remote-error {
+  margin-top: 2px;
+}
+
+.remote-error-address {
+  padding: 3px 8px;
+  border-radius: 5px;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  font-family: monospace;
+  font-size: 11.5px;
+}
+
+.remote-error-callout {
+  padding: 10px 12px;
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 7%, transparent);
+}
+
+.remote-error-icon {
+  margin-top: 1px;
+  color: color-mix(in srgb, currentColor 50%, transparent);
+}
+
+.remote-error-message {
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+/* --- Open With --------------------------------------------------------- */
+
+.open-with-intro {
+  padding: 0 22px 6px;
+}
+
+.open-with-list {
+  padding: 4px 12px 14px;
+}
+
+.open-with-section {
+  padding: 10px 10px 4px;
+}
+
+.open-with-row {
+  min-height: 40px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  transition: background 90ms ease-out;
+}
+
+.open-with-row:hover,
+.open-with-row:focus-visible {
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  outline: none;
+}
+
+.open-with-row:active {
+  background: color-mix(in srgb, var(--accent-bg-color) 18%, transparent);
+}
+
+.open-with-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.open-with-description {
+  color: color-mix(in srgb, currentColor 45%, transparent);
+  font-size: 11px;
+}
+
+.open-with-empty {
+  padding: 32px 22px;
+  color: color-mix(in srgb, currentColor 45%, transparent);
+  font-size: 12.5px;
+}
+
+.search-facets {
+  padding: 10px 20px 4px;
+}
+
+.search-chip {
+  min-height: 26px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 4px;
+  color: color-mix(in srgb, currentColor 72%, transparent);
+  background: color-mix(in srgb, currentColor 7%, transparent);
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 90ms ease-out, color 90ms ease-out;
+}
+
+.search-chip:hover {
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 11%, transparent);
+}
+
+.search-chip:checked {
+  color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-bg-color) 20%, transparent);
+}
+
+.search-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-bg-color) 45%, transparent);
+}
+
+.search-run {
+  min-height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--accent-fg-color);
+  background: var(--accent-bg-color);
+  box-shadow: none;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.search-run:hover {
+  background: color-mix(in srgb, var(--accent-bg-color) 88%, white);
+}
+
+.search-advanced {
+  padding: 8px 20px 4px;
+}
+
+.search-advanced entry,
+.search-advanced spinbutton,
+.search-advanced dropdown > button {
+  min-height: 30px;
+  font-size: 12.5px;
+}
+
+.search-advanced spinbutton > button {
+  min-width: 24px;
+}
+
+.search-facet-label {
+  margin-left: 4px;
+  color: color-mix(in srgb, currentColor 50%, transparent);
+  font-size: 11.5px;
+}
+
+.search-status {
+  padding: 10px 22px 6px;
+  color: color-mix(in srgb, currentColor 45%, transparent);
+  font-size: 11.5px;
+}
+
+.search-results {
+  padding: 2px 10px 12px;
+}
+
+.search-result-row {
+  min-height: 44px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  transition: background 90ms ease-out;
+}
+
+.search-result-row:hover,
+.search-result-row:focus-visible {
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  outline: none;
+}
+
+.search-result-row:active {
+  background: color-mix(in srgb, var(--accent-bg-color) 18%, transparent);
+}
+
+.search-result-icon {
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.search-result-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.search-result-path,
+.search-result-detail {
+  color: color-mix(in srgb, currentColor 45%, transparent);
+  font-size: 11px;
+}
+
+.terminal-split > separator {
+  /* Keep the resize target's height while painting only its central pixel. */
+  min-height: 1px;
+  border-top: 2px solid transparent;
+  border-bottom: 2px solid transparent;
+  background-clip: content-box;
+  transition: background-color 120ms ease;
+}
+
+.terminal-panel {
+  color: @carelo_text;
+  background: @carelo_void;
+}
+
+.terminal-header {
+  min-height: 28px;
+  padding: 3px 8px;
+  border-bottom: 1px solid @carelo_separator;
+  background: @carelo_pane;
+  box-shadow: none;
+}
+
+.terminal-tabs-scroll,
+.terminal-tabs-scroll viewport {
+  background: transparent;
+}
+
+.terminal-tabs { padding: 0; }
+
+.terminal-tab {
+  min-width: 140px;
+  min-height: 24px;
+  padding: 0 6px 0 0;
+  border: 1px solid alpha(@carelo_text, 0.06);
+  border-radius: 6px;
+  color: @carelo_faint;
+  background: transparent;
+}
+
+.terminal-tab:hover { background: @carelo_hover; }
+
+.terminal-tab-active {
+  color: @carelo_text;
+  border-color: alpha(@carelo_text, 0.18);
+  background: @carelo_control;
+  box-shadow: none;
+}
+
+.terminal-tab-main {
+  min-width: 100px;
+  min-height: 24px;
+  padding: 0 6px 0 8px;
+  border-radius: 5px;
+  color: inherit;
+  background: transparent;
+  box-shadow: none;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.terminal-tab-main:hover,
+.terminal-tab-main:active {
+  color: inherit;
+  background: transparent;
+  box-shadow: none;
+}
+
+.terminal-tab-status {
+  color: @carelo_muted;
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.terminal-tab-close {
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0;
+  border-radius: 3px;
+  color: inherit;
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.45;
+}
+
+.terminal-tab:hover .terminal-tab-close,
+.terminal-tab-active .terminal-tab-close,
+.terminal-tab-close:focus-visible { opacity: 1; }
+
+.terminal-tab-close:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.terminal-actions {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid @carelo_separator;
+  color: @carelo_icon;
+}
+
+.terminal-action,
+menubutton.terminal-menu > button {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 4px;
+  color: @carelo_icon;
+  background: transparent;
+  box-shadow: none;
+}
+
+.terminal-action:hover,
+menubutton.terminal-menu > button:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+
+.terminal-tabs-arrow:disabled { opacity: 0.3; }
+
+.terminal-surface {
+  color: @carelo_text;
+  background: @carelo_void;
+  outline: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Dialogs
+   Every modal is a libadwaita sheet floating over the window. They share one
+   surface (flat fill and a thin boundary), one control language
+   (quiet inputs, compact buttons, key caps) and one type scale with the command
+   palette. Colours come from the Adwaita bridge variables so light mode works
+   without a second set of rules.
+   --------------------------------------------------------------------------- */
+
+dialog-host > dimming {
+  background: rgba(0, 0, 0, 0.42);
+}
+
+dialog.floating > sheet {
+  border: 1px solid @carelo_hairline;
+  border-radius: 4px;
+  background: var(--dialog-bg-color);
+  color: var(--dialog-fg-color);
+  box-shadow: none;
+}
+
+dialog.floating > sheet > widget,
+dialog.floating > sheet > widget > * {
+  border-radius: 4px;
+}
+
+/* --- Alert sheets --------------------------------------------------------- */
+
+.alert-sheet-content {
+  padding: 22px 22px 6px;
+  font-size: 13px;
+}
+
+.alert-heading {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.alert-body,
+.alert-body-scroll {
+  background: transparent;
+}
+
+.alert-body {
+  color: color-mix(in srgb, currentColor 62%, transparent);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.alert-body selection {
+  background: color-mix(in srgb, var(--accent-bg-color) 35%, transparent);
+}
+
+.alert-extra {
+  margin-top: 10px;
+}
+
+/* --- Shared controls inside any dialog ---------------------------------- */
+
+dialog entry,
+dialog spinbutton,
+.dialog-form entry {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 4px;
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 9%, transparent);
+  font-size: 13px;
+  transition: box-shadow 90ms ease-out;
+}
+
+dialog entry:focus-within,
+dialog spinbutton:focus-within,
+.dialog-form entry:focus-within {
+  outline: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-bg-color) 62%, transparent);
+}
+
+dialog entry.error {
+  box-shadow: inset 0 0 0 1px alpha(#e5484d, 0.75);
+}
+
+dialog entry selection {
+  background: color-mix(in srgb, var(--accent-bg-color) 40%, transparent);
+}
+
+dialog entry.monospace {
+  font-family: monospace;
+  font-size: 12px;
+}
+
+dialog spinbutton {
+  padding: 0;
+}
+
+dialog spinbutton > text {
+  padding: 0 10px;
+}
+
+dialog spinbutton > button {
+  min-width: 28px;
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, currentColor 60%, transparent);
+}
+
+dialog spinbutton > button:hover {
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+dialog dropdown > button {
+  min-height: 34px;
+  padding: 0 8px 0 12px;
+  border: 0;
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 9%, transparent);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+dialog dropdown > button:hover {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+dialog dropdown:focus-within,
+dialog dropdown > button:focus-visible,
+dialog dropdown > button:focus-within {
+  outline: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-bg-color) 62%, transparent);
+}
+
+dialog dropdown > button arrow {
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+dialog checkbutton {
+  padding: 2px 0;
+  font-size: 12.5px;
+}
+
+dialog checkbutton:focus-visible {
+  outline: none;
+}
+
+dialog checkbutton:focus-visible check {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-bg-color) 45%, transparent);
+}
+
+dialog check {
+  min-width: 16px;
+  min-height: 16px;
+  margin-right: 4px;
+  border: 0;
+  border-radius: 4px;
+  color: transparent;
+  background: color-mix(in srgb, var(--dialog-fg-color) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--dialog-fg-color) 18%, transparent);
+  transition: background 90ms ease-out;
+}
+
+dialog check:hover {
+  background: color-mix(in srgb, var(--dialog-fg-color) 16%, transparent);
+}
+
+dialog check:checked {
+  color: var(--accent-fg-color);
+  background: var(--accent-bg-color);
+  box-shadow: none;
+}
+
+dialog label.dim-label,
+dialog .dialog-hint {
+  color: color-mix(in srgb, currentColor 55%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.permissions-heading {
+  color: color-mix(in srgb, currentColor 55%, transparent);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* --- Utility dialogs: Settings, Context Menu Tools, Shortcuts ----------- */
+
+.utility-dialog headerbar {
+  min-height: 48px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.utility-dialog headerbar .title {
+  font-size: 13.5px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.utility-dialog headerbar button {
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 6px;
+  color: color-mix(in srgb, currentColor 65%, transparent);
+  background: transparent;
+  box-shadow: none;
+}
+
+.utility-dialog headerbar button:hover {
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 9%, transparent);
+}
+
+.utility-dialog headerbar windowcontrols > button > image {
+  background: transparent;
+  box-shadow: none;
+}
+
+.dialog-body {
+  padding: 4px 22px 20px;
+}
+
+.dialog-eyebrow {
+  margin-top: 10px;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dialog-actions {
+  padding: 14px 20px 20px;
+}
+
+.utility-dialog .dialog-actions {
+  padding-top: 12px;
+  border-top: 1px solid @carelo_separator;
+}
+
+.dialog-actions-stacked {
+  padding-top: 10px;
+}
+
+.dialog-actions-stacked button {
+  min-height: 36px;
+}
+
+.dialog-actions button {
+  min-height: 34px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 4px;
+  color: currentColor;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  box-shadow: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  transition: background 90ms ease-out;
+}
+
+.dialog-actions button:hover {
+  background: color-mix(in srgb, currentColor 13%, transparent);
+}
+
+.dialog-actions button.suggested-action {
+  color: var(--accent-fg-color);
+  background: var(--accent-bg-color);
+}
+
+.dialog-actions button.suggested-action:hover {
+  background: color-mix(in srgb, var(--accent-bg-color) 88%, white);
+}
+
+.dialog-actions button.destructive-action {
+  color: #ffffff;
+  background: #e5484d;
+}
+
+.dialog-actions button.destructive-action:hover {
+  background: #ec5f63;
+}
+
+.settings-link {
+  min-height: 26px;
+  padding: 0;
+  border-radius: 0;
+  color: var(--accent-color);
+  background: transparent;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.settings-link:hover {
+  color: color-mix(in srgb, var(--accent-color) 80%, white);
+  background: transparent;
+}
+
+.dialog-editor {
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.dialog-editor textview,
+.dialog-editor textview > text {
+  padding: 8px 10px;
+  background: transparent;
+  color: currentColor;
+  font-size: 12px;
+}
+
+.dialog-editor:focus-within {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-bg-color) 62%, transparent);
+}
+
+.dialog-search-bar {
+  padding: 0 12px 0 20px;
+  border-bottom: 1px solid @carelo_separator;
+}
+
+.dialog-search,
+.dialog-search:focus-within {
+  min-height: 42px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: currentColor;
+  background: transparent;
+  box-shadow: none;
+  font-size: 14px;
+  outline: none;
+}
+
+.dialog-search image {
+  margin-right: 8px;
+  color: color-mix(in srgb, currentColor 45%, transparent);
+  -gtk-icon-size: 16px;
+}
+
+.dialog-search text placeholder,
+.dialog-search placeholder {
+  color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+.shortcut-list {
+  padding: 8px 10px 12px;
+}
+
+.shortcut-row {
+  min-height: 36px;
+  padding: 0 10px 0 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  transition: background 90ms ease-out;
+}
+
+.shortcut-row:hover {
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+
+.shortcut-row .command-key {
+  color: color-mix(in srgb, currentColor 72%, transparent);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.shortcut-row .command-row-key-sep {
+  color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+.shortcut-unbound {
+  color: color-mix(in srgb, currentColor 35%, transparent);
+  font-size: 12px;
+}
+
+/* Bundled symbolic SVGs: muted type accents follow the light/dark text palette.
+   Two classes override row defaults without affecting toolbar or sidebar icons. */
+image.commander-file-icon.icon-folder { color: mix(@carelo_text, @carelo_accent, 0.70); }
+image.commander-file-icon.icon-code { color: mix(@carelo_text, #6c9ae8, 0.70); }
+image.commander-file-icon.icon-data { color: mix(@carelo_text, #429eaa, 0.70); }
+image.commander-file-icon.icon-image { color: mix(@carelo_text, #a17bc4, 0.70); }
+image.commander-file-icon.icon-media { color: mix(@carelo_text, #bb739d, 0.70); }
+image.commander-file-icon.icon-archive { color: mix(@carelo_text, #b98a47, 0.70); }
+image.commander-file-icon.icon-document { color: @carelo_icon; }
+image.commander-file-icon.icon-pdf { color: mix(@carelo_text, #cd746b, 0.70); }
+image.commander-file-icon.icon-sheet { color: mix(@carelo_text, #559b78, 0.70); }
+image.commander-file-icon.icon-muted { color: @carelo_icon; }

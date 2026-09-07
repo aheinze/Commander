@@ -1,0 +1,82 @@
+use super::*;
+use dualpane_engine::JobControl;
+use std::time::{Duration, Instant};
+
+#[derive(Clone, Debug, Default)]
+pub struct ArchiveProgress {
+    pub bytes_done: u64,
+    pub items_done: u64,
+    pub current_path: Option<VPath>,
+    pub finishing: bool,
+}
+
+pub struct ArchiveTask<'a> {
+    pub(super) cancel: CancelToken,
+    control: Option<JobControl>,
+    progress: ArchiveProgress,
+    callback: Box<dyn FnMut(ArchiveProgress) + 'a>,
+    last_emit: Option<Instant>,
+}
+
+impl<'a> ArchiveTask<'a> {
+    pub fn new(cancel: &CancelToken) -> Self {
+        Self {
+            cancel: cancel.clone(),
+            control: None,
+            progress: ArchiveProgress::default(),
+            callback: Box::new(|_| {}),
+            last_emit: None,
+        }
+    }
+
+    pub fn with_progress(control: &JobControl, callback: impl FnMut(ArchiveProgress) + 'a) -> Self {
+        Self {
+            control: Some(control.clone()),
+            callback: Box::new(callback),
+            ..Self::new(&control.cancel_token())
+        }
+    }
+
+    pub(super) fn check(&self) -> Result<(), dualpane_core::Cancelled> {
+        self.control
+            .as_ref()
+            .map_or_else(|| self.cancel.check(), JobControl::checkpoint)
+    }
+
+    pub(super) fn begin(&mut self, path: &VPath) {
+        self.progress.current_path = Some(path.clone());
+        self.emit();
+    }
+
+    pub(super) fn advanced(&mut self, bytes: u64) {
+        self.progress.bytes_done = self.progress.bytes_done.saturating_add(bytes);
+        self.emit();
+    }
+
+    pub(super) fn item_done(&mut self) {
+        self.progress.items_done = self.progress.items_done.saturating_add(1);
+        self.emit();
+    }
+
+    pub(super) fn finishing(&mut self) -> Result<(), String> {
+        self.check()
+            .map_err(|_| "Archive operation cancelled".to_owned())?;
+        self.progress.finishing = true;
+        self.flush();
+        Ok(())
+    }
+
+    fn emit(&mut self) {
+        if self
+            .last_emit
+            .is_none_or(|last| last.elapsed() >= Duration::from_millis(50))
+        {
+            self.flush();
+        }
+    }
+
+    pub fn flush(&mut self) {
+        (self.callback)(self.progress.clone());
+        self.last_emit = Some(Instant::now());
+    }
+}

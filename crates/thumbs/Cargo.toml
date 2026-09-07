@@ -1,0 +1,23 @@
+[package]
+name = "dualpane-thumbs"
+description = "Thumbnail scheduling and caching for Commander"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+crossbeam-channel.workspace = true
+dualpane-core.workspace = true
+dualpane-vfs.workspace = true
+image.workspace = true
+karet-pdf.workspace = true
+syntect.workspace = true
+two-face.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

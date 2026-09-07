@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Commander
+Comment=Fast native dual-pane file manager
+Exec=commander
+TryExec=commander
+Icon=org.example.Dualpane
+Terminal=false
+Categories=System;FileTools;FileManager;
+Keywords=files;folders;dual-pane;commander;
+StartupNotify=true
+StartupWMClass=org.example.Dualpane

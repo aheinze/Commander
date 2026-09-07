@@ -1,0 +1,49 @@
+[package]
+name = "dualpane-app"
+description = "Native Commander desktop application"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+tracy = ["dep:tracing-tracy"]
+
+[[bin]]
+name = "commander"
+path = "src/main.rs"
+
+[dependencies]
+dualpane-core.workspace = true
+dualpane-engine.workspace = true
+dualpane-index.workspace = true
+dualpane-platform.workspace = true
+dualpane-thumbs.workspace = true
+dualpane-vfs.workspace = true
+directories.workspace = true
+flate2.workspace = true
+image.workspace = true
+lopdf.workspace = true
+portable-pty.workspace = true
+vt100.workspace = true
+regex.workspace = true
+relm4.workspace = true
+relm4-components.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sevenz-rust2.workspace = true
+sha2.workspace = true
+shlex.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+toml_edit.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tracing-tracy = { workspace = true, optional = true }
+zip.workspace = true
+
+[lints]
+workspace = true

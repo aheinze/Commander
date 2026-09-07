@@ -1,0 +1,23 @@
+[package]
+name = "dualpane-benches"
+description = "Criterion performance suites for Commander"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bench]]
+name = "index_pipeline"
+path = "index_pipeline.rs"
+harness = false
+
+[dependencies]
+criterion.workspace = true
+dualpane-core.workspace = true
+dualpane-index.workspace = true
+dualpane-vfs.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
