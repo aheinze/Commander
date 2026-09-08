@@ -512,7 +512,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dualpane-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "directories",
  "dualpane-core",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "dualpane-benches"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "criterion",
  "dualpane-core",
@@ -558,14 +558,14 @@ dependencies = [
 
 [[package]]
 name = "dualpane-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "dualpane-engine"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "crossbeam-channel",
  "dualpane-core",
@@ -580,7 +580,7 @@ dependencies = [
 
 [[package]]
 name = "dualpane-index"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "crossbeam-channel",
  "dualpane-core",
@@ -597,7 +597,7 @@ dependencies = [
 
 [[package]]
 name = "dualpane-platform"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dualpane-core",
  "libc",
@@ -607,7 +607,7 @@ dependencies = [
 
 [[package]]
 name = "dualpane-thumbs"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "crossbeam-channel",
  "dualpane-core",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "dualpane-vfs"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dualpane-core",
  "dualpane-platform",
@@ -3389,7 +3389,7 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "dualpane-core",
  "dualpane-engine",
