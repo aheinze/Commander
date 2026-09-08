@@ -217,6 +217,7 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
         let focus = gtk::prelude::GtkWindowExt::focus(app.widget()).unwrap();
         assert!(focus.is_ancestor(&widgets.global_search));
     }
+    check_centered_topbar(&app);
     // Exercise GTK's own row-hover controller: moving over a sibling in an
     // ancestor column must not change the open branch or its selection.
     let parent_view = app.widgets().panes[0].miller_columns[0]
@@ -258,6 +259,19 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
     assert_eq!(app.model().pane(PaneId::Left).miller_columns.len(), 2);
     assert!(!parent_view.is_single_click_activate());
     let generation = app.model().pane(PaneId::Left).miller_generation;
+    // A native row grabs focus on press; pane activation is processed before
+    // release. It must not move focus (and horizontal scroll) to the last column.
+    let album_item = miller_row_widget(&parent_view, &VPath::from(albums.as_path()))
+        .parent()
+        .unwrap();
+    assert!(album_item.grab_focus());
+    app.emit(AppMsg::ActivatePane(PaneId::Left));
+    drain_frames();
+    assert_eq!(
+        gtk::prelude::GtkWindowExt::focus(app.widget()),
+        Some(album_item),
+        "pressing an ancestor must keep focus on the clicked row"
+    );
     click_miller_folder(&app, 0, "Albums");
     drain_frames();
     assert_eq!(app.model().pane(PaneId::Left).miller_generation, generation);
@@ -267,7 +281,20 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
         app.model().pane(PaneId::Left).current_directory()
             == &VPath::from(fixture.path().join("Empty folder"))
             && !app.model().pane(PaneId::Left).loading
+            && app.model().pane(PaneId::Left).miller_columns[1]
+                .listing
+                .is_some()
     });
+    drain_frames();
+    assert_miller_focus(&app, 0, "Empty folder");
+    let generation = app.model().pane(PaneId::Left).miller_generation;
+    app.emit(AppMsg::Refresh(PaneId::Left));
+    wait_until(|| {
+        app.model().pane(PaneId::Left).miller_generation > generation
+            && !app.model().pane(PaneId::Left).loading
+    });
+    drain_frames();
+    assert_miller_focus(&app, 0, "Empty folder");
     click_miller_folder(&app, 0, "Albums");
     wait_until(|| {
         app.model().pane(PaneId::Left).current_directory() == &VPath::from(albums.as_path())
@@ -277,6 +304,102 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
         .model
         .clone()
         .unwrap();
+    assert!(
+        model.stable_selection().is_empty(),
+        "the child model must not inherit its parent's selected folder"
+    );
+    select_miller_item(&app, 1, "Notes.txt", true, false);
+    wait_until(|| {
+        app.model().operation_sources(PaneId::Left) == vec![VPath::from(albums.join("Notes.txt"))]
+    });
+    let generation = app.model().pane(PaneId::Left).miller_generation;
+    app.emit(AppMsg::Refresh(PaneId::Left));
+    wait_until(|| {
+        app.model().pane(PaneId::Left).miller_generation > generation
+            && !app.model().pane(PaneId::Left).loading
+    });
+    drain_frames();
+    assert_miller_focus(&app, 1, "Notes.txt");
+    // Background changes can insert rows before the focused file. Track its
+    // identity, rather than restoring the previous numeric row position.
+    let inserted = albums.join("A newly inserted.txt");
+    std::fs::write(&inserted, b"watch fixture").unwrap();
+    wait_until(|| {
+        app.model().pane(PaneId::Left).miller_columns[1]
+            .listing
+            .as_ref()
+            .is_some_and(|listing| listing.len() == 4)
+    });
+    drain_frames();
+    assert_miller_focus(&app, 1, "Notes.txt");
+    assert_eq!(
+        app.model().operation_sources(PaneId::Left),
+        vec![VPath::from(albums.join("Notes.txt"))]
+    );
+    std::fs::remove_file(&inserted).unwrap();
+    wait_until(|| {
+        app.model().pane(PaneId::Left).miller_columns[1]
+            .listing
+            .as_ref()
+            .is_some_and(|listing| listing.len() == 3)
+    });
+    drain_frames();
+    assert_miller_focus(&app, 1, "Notes.txt");
+    assert!(
+        app.widgets().panes[0].miller_columns[0]
+            .model
+            .as_ref()
+            .unwrap()
+            .stable_selection()
+            .is_empty()
+    );
+    select_miller_item(&app, 1, "Notes.txt", true, false);
+    drain_frames();
+    assert!(app.model().pane(PaneId::Left).selection.is_empty());
+    assert!(
+        model.selection().is_empty(),
+        "deselection must survive a redraw"
+    );
+    select_miller_item(&app, 1, "Trip itinerary.pdf", false, false);
+    select_miller_item(&app, 1, "Landscape photography collection.txt", false, true);
+    drain_frames();
+    assert_eq!(model.selection().size(), 3);
+    assert_eq!(
+        app.model().pane(PaneId::Left).miller_columns[1].selected_row,
+        Some(0)
+    );
+    assert_eq!(
+        gtk::prelude::GtkWindowExt::focus(app.widget()),
+        Some(
+            miller_row_widget(
+                &app.widgets().panes[0].miller_columns[1]
+                    .view
+                    .clone()
+                    .unwrap(),
+                &VPath::from(albums.join("Landscape photography collection.txt")),
+            )
+            .parent()
+            .unwrap()
+        ),
+        "an upward Shift-click must keep focus at the clicked end of the range"
+    );
+    // Repeating a supported range operation must not trigger GTK's fallback
+    // toggle, and shrinking the range must clear old row highlights.
+    select_miller_item(&app, 1, "Landscape photography collection.txt", true, true);
+    assert_eq!(model.selection().size(), 3);
+    select_miller_item(&app, 1, "Notes.txt", false, true);
+    drain_frames();
+    assert_eq!(model.selection().size(), 2);
+    let first_item = miller_row_widget(
+        &app.widgets().panes[0].miller_columns[1]
+            .view
+            .clone()
+            .unwrap(),
+        &VPath::from(albums.join("Landscape photography collection.txt")),
+    )
+    .parent()
+    .unwrap();
+    assert!(!first_item.state_flags().contains(gtk::StateFlags::SELECTED));
     model.select_item(0, true);
     model.select_item(1, false);
     wait_until(|| app.model().pane(PaneId::Left).selection.len() == 2);
@@ -615,7 +738,42 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
     if std::env::var_os("COMMANDER_STYLE_SNAPSHOTS").is_some() {
         style_gallery(&app, fixture.path());
     }
+    check_navigation_keeps_view_mode(&app, fixture.path());
     app.widget().close();
+}
+
+fn check_navigation_keeps_view_mode(app: &relm4::Controller<AppModel>, fixture: &std::path::Path) {
+    let first = fixture.join("View mode first");
+    let second = fixture.join("View mode second");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    let first = VPath::from(first);
+    let second = VPath::from(second);
+    let ready = |path: &VPath| {
+        let model = app.model();
+        let pane = model.pane(PaneId::Left);
+        !pane.loading && pane.current_directory() == path
+    };
+    for (mode, button) in [(PaneViewMode::List, 0), (PaneViewMode::Grid, 1)] {
+        // Leave the first folder in Columns, then choose a different view elsewhere.
+        app.emit(AppMsg::Navigate(PaneId::Left, first.clone()));
+        app.emit(AppMsg::SetViewMode(PaneViewMode::Columns));
+        wait_until(|| ready(&first));
+        app.emit(AppMsg::Navigate(PaneId::Left, second.clone()));
+        wait_until(|| ready(&second));
+        app.emit(AppMsg::SetViewMode(mode));
+        wait_until(|| app.model().pane(PaneId::Left).view_mode == mode);
+        for (message, path) in [
+            (AppMsg::Navigate(PaneId::Left, first.clone()), &first),
+            (AppMsg::Back(PaneId::Left), &second),
+            (AppMsg::Forward(PaneId::Left), &first),
+        ] {
+            app.emit(message);
+            wait_until(|| ready(path));
+            assert_eq!(app.model().pane(PaneId::Left).view_mode, mode);
+            assert!(app.widgets().topbar.view_buttons[button].is_active());
+        }
+    }
 }
 
 /// Reuse the native fixture to inspect every main surface after a styling change.
@@ -688,6 +846,90 @@ fn style_gallery(app: &relm4::Controller<AppModel>, fixture: &std::path::Path) {
     apply_appearance(AppearanceMode::Light);
     drain_frames();
     snapshot(app.widget(), "clean-inspector-light");
+    // Render the real file menu, including its filter, shortcuts, and scroll area.
+    let view = app.widgets().panes[0].column_view.clone();
+    let target = VPath::from(workspace.join("Release notes.md"));
+    let y = (0..view.height())
+        .find(|y| {
+            context_menu::context_target_at(view.upcast_ref(), 60.0, f64::from(*y))
+                .is_some_and(|(path, _)| path == target)
+        })
+        .expect("visible context-menu target");
+    let controllers = view.observe_controllers();
+    for index in 0..controllers.n_items() {
+        if let Some(gesture) = controllers.item(index).and_downcast::<gtk::GestureClick>()
+            && gesture.button() == 3
+        {
+            gesture.emit_by_name::<()>("pressed", &[&1_i32, &60.0_f64, &f64::from(y)]);
+        }
+    }
+    drain_frames();
+    let mut child = view.first_child();
+    let menu = loop {
+        let widget = child.expect("open file context menu");
+        child = widget.next_sibling();
+        if let Ok(menu) = widget.downcast::<gtk::Popover>() {
+            break menu;
+        }
+    };
+    for (appearance, name) in [
+        (AppearanceMode::Dark, "context-menu-dark"),
+        (AppearanceMode::Light, "context-menu-light"),
+    ] {
+        apply_appearance(appearance);
+        drain_frames();
+        snapshot_popover(app.widget(), &menu, name);
+    }
+    menu.popdown();
+    drain_frames();
+    // Include short and overflowing code in the optional native screenshot gallery.
+    for (contents, length) in [
+        (
+            "fn main() {\n    println!(\"Hello, Commander!\");\n}\n".to_owned(),
+            "short",
+        ),
+        (
+            (0..100)
+                .map(|line| format!("let value_{line} = \"{}\";\n", "long code line ".repeat(12)))
+                .collect(),
+            "long",
+        ),
+    ] {
+        let path = workspace.join(format!("quick-look-{length}.rs"));
+        std::fs::write(&path, contents).unwrap();
+        app.emit(AppMsg::ExecuteCommand(CommandId::Refresh));
+        wait_until(|| {
+            let model = app.model();
+            let pane = model.pane(PaneId::Left);
+            !pane.loading
+                && pane.active().listing.as_ref().is_some_and(|listing| {
+                    listing
+                        .rows()
+                        .any(|entry| Some(entry.name()) == path.file_name())
+                })
+        });
+        app.emit(AppMsg::ContextTarget(
+            PaneId::Left,
+            Some((VPath::from(path.as_path()), EntryKind::File)),
+        ));
+        wait_until(|| {
+            let model = app.model();
+            !model.preview_state.loading
+                && model.preview_state.path.as_ref() == Some(&VPath::from(path.as_path()))
+        });
+        app.emit(AppMsg::ToggleQuickLook);
+        wait_until(|| app.widget().visible_dialog().is_some());
+        for (appearance, theme) in [
+            (AppearanceMode::Dark, "dark"),
+            (AppearanceMode::Light, "light"),
+        ] {
+            apply_appearance(appearance);
+            drain_frames();
+            snapshot(app.widget(), &format!("quick-look-{length}-{theme}"));
+        }
+        app.emit(AppMsg::ToggleQuickLook);
+        wait_until(|| app.widget().visible_dialog().is_none());
+    }
     app.emit(AppMsg::ExecuteCommand(CommandId::CommandPalette));
     wait_until(|| app.model().palette_open);
     drain_frames();
@@ -731,6 +973,114 @@ fn row_for(model: &AppModel, column: usize, name: &str) -> u32 {
         .unwrap() as u32
 }
 
+fn check_centered_topbar(app: &relm4::Controller<AppModel>) {
+    app.widgets().global_search.set_text("Notes");
+    wait_until(|| {
+        app.model().pane(PaneId::Left).filter_query == "Notes"
+            && !app.model().pane(PaneId::Left).filtering
+    });
+    app.widgets().global_search.select_region(1, 4);
+    let mut problems = Vec::new();
+    for (width, sidebar) in [
+        (1600, false),
+        (1200, false),
+        (1000, false),
+        (900, false),
+        (720, false),
+        (1200, true),
+        (900, true),
+        (720, true),
+        (1600, true),
+        (1520, false),
+    ] {
+        if app.model().sidebar_visible != sidebar {
+            app.emit(AppMsg::ExecuteCommand(CommandId::ToggleSidebar));
+        }
+        app.widget().set_default_size(width, 900);
+        wait_until(|| {
+            app.widget().width() == width
+                && app.model().window_width == app.widget().surface().unwrap().width()
+                && app.model().sidebar_visible == sidebar
+        });
+        drain_frames();
+        // A long title must yield space without displacing the center field.
+        app.widgets()
+            .topbar
+            .title
+            .set_label("A long project folder with a descriptive name");
+        drain_frames();
+        let widgets = app.widgets();
+        let bar = &widgets.topbar.root;
+        let search = widgets.global_search.compute_bounds(bar).unwrap();
+        let offset = (search.x() + search.width() / 2.0 - bar.width() as f32 / 2.0).abs();
+        if offset > 1.0 {
+            problems.push(format!(
+                "search is {offset}px off center at {width}px, sidebar={sidebar}"
+            ));
+        }
+        if search.width() < 180.0 || search.width() > 560.0 {
+            problems.push(format!(
+                "search width is {}px at {width}px, sidebar={sidebar}",
+                search.width()
+            ));
+        }
+        for menu in [
+            &widgets.topbar.new_menu,
+            &widgets.topbar.view_menu,
+            &widgets.topbar.layout_menu,
+            &widgets.topbar.more_menu,
+        ] {
+            let bounds = menu.compute_bounds(bar).unwrap();
+            if bounds.x() < 0.0 || bounds.x() + bounds.width() > bar.width() as f32 + 1.0 {
+                problems.push(format!(
+                    "menu outside top bar at {width}px, sidebar={sidebar}"
+                ));
+            }
+            let same_row = search.y() < bounds.y() + bounds.height()
+                && bounds.y() < search.y() + search.height();
+            if same_row && search.x() + search.width() > bounds.x() + 1.0 {
+                problems.push(format!(
+                    "search overlaps menu at {width}px, sidebar={sidebar}"
+                ));
+            }
+        }
+        assert!(widgets.global_search.is_mapped());
+        assert_eq!(widgets.global_search.text(), "Notes");
+        assert_eq!(widgets.global_search.selection_bounds(), Some((1, 4)));
+        assert!(
+            gtk::prelude::GtkWindowExt::focus(app.widget())
+                .unwrap()
+                .is_ancestor(&widgets.global_search)
+        );
+        if let Some(directory) = std::env::var_os("COMMANDER_MILLER_SNAPSHOT_DIR") {
+            let snapshot = gtk::Snapshot::new();
+            bar.parent().unwrap().snapshot_child(bar, &snapshot);
+            let node = snapshot.to_node().unwrap();
+            app.widget()
+                .renderer()
+                .unwrap()
+                .render_texture(&node, None)
+                .save_to_png(
+                    std::path::Path::new(&directory)
+                        .join(format!("centered-search-{width}-{sidebar}.png")),
+                )
+                .unwrap();
+        }
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+    app.widgets().global_search.set_text("");
+    wait_until(|| {
+        app.model().pane(PaneId::Left).filter_query.is_empty()
+            && !app.model().pane(PaneId::Left).filtering
+            && app.model().pane(PaneId::Left).miller_columns[1]
+                .listing
+                .as_ref()
+                .unwrap()
+                .len()
+                == 3
+    });
+}
+
 fn miller_row_widget(view: &gtk::ListView, path: &VPath) -> gtk::Widget {
     fn find(widget: &gtk::Widget, path: &str) -> Option<gtk::Widget> {
         if widget.has_css_class("column-browser-row")
@@ -771,17 +1121,13 @@ fn click_miller_folder(app: &relm4::Controller<AppModel>, column: usize, name: &
         .view
         .clone()
         .unwrap();
-    let model = app.widgets().panes[0].miller_columns[column]
-        .model
-        .clone()
-        .unwrap();
     let path = app.model().pane(PaneId::Left).miller_columns[column]
         .path
         .join_name(OsStr::new(name));
     let row = miller_row_widget(&view, &path);
     let bounds = row.compute_bounds(&view).unwrap();
     // GTK selects the row before the view's bubble-phase release handler runs.
-    model.select_item(row_for(&app.model(), column, name), true);
+    select_miller_item(app, column, name, false, false);
     let controllers = view.observe_controllers();
     for index in 0..controllers.n_items() {
         if let Some(gesture) = controllers.item(index).and_downcast::<gtk::GestureClick>()
@@ -799,6 +1145,45 @@ fn click_miller_folder(app: &relm4::Controller<AppModel>, column: usize, name: &
         }
     }
     panic!("Miller folder click controller is installed");
+}
+
+fn select_miller_item(
+    app: &relm4::Controller<AppModel>,
+    column: usize,
+    name: &str,
+    modify: bool,
+    extend: bool,
+) {
+    let view = app.widgets().panes[0].miller_columns[column]
+        .view
+        .clone()
+        .unwrap();
+    let path = app.model().pane(PaneId::Left).miller_columns[column]
+        .path
+        .join_name(OsStr::new(name));
+    let item = miller_row_widget(&view, &path).parent().unwrap();
+    assert!(item.grab_focus());
+    // Use the same GTK action as its native click-release handler, including
+    // GTK's range anchor and fallback behavior.
+    item.activate_action("listitem.select", Some(&(modify, extend).to_variant()))
+        .unwrap();
+    drain_frames();
+}
+
+#[track_caller]
+fn assert_miller_focus(app: &relm4::Controller<AppModel>, column: usize, name: &str) {
+    let view = app.widgets().panes[0].miller_columns[column]
+        .view
+        .clone()
+        .unwrap();
+    let path = app.model().pane(PaneId::Left).miller_columns[column]
+        .path
+        .join_name(OsStr::new(name));
+    assert_eq!(
+        gtk::prelude::GtkWindowExt::focus(app.widget()),
+        miller_row_widget(&view, &path).parent(),
+        "the focus outline must stay on {name} when listings refresh"
+    );
 }
 
 #[track_caller]
@@ -830,7 +1215,8 @@ fn snapshot_popover(window: &adw::ApplicationWindow, popover: &gtk::Popover, nam
         return;
     };
     let snapshot = gtk::Snapshot::new();
-    let child = popover.child().unwrap();
+    // Include the contents surface so light-menu screenshots are not transparent.
+    let child = popover.child().unwrap().parent().unwrap();
     child.parent().unwrap().snapshot_child(&child, &snapshot);
     let node = snapshot.to_node().unwrap();
     window
@@ -897,4 +1283,53 @@ fn navigation_session_restores_branch_widths_and_folder_preferences() {
         listing.row(0).unwrap(),
     )));
     assert!(restored.restore_names.is_empty());
+}
+
+#[test]
+fn pane_view_mode_takes_priority_over_saved_folder_modes() {
+    let modes = [
+        PaneViewMode::List,
+        PaneViewMode::Grid,
+        PaneViewMode::Columns,
+    ];
+    for mode in modes {
+        for saved_mode in modes {
+            let session = PaneSession {
+                tabs: vec!["/first".to_owned(), "/second".to_owned()],
+                view_mode: mode,
+                folders: ["/first", "/second"]
+                    .into_iter()
+                    .map(|path| {
+                        (
+                            path.to_owned(),
+                            FolderViewSession {
+                                view_mode: saved_mode,
+                                sort_key: PaneSortKey::Size,
+                                show_hidden: true,
+                                ..FolderViewSession::default()
+                            },
+                        )
+                    })
+                    .collect(),
+                ..PaneSession::default()
+            };
+            let mut pane = PaneState::from_session(&session, VPath::from("/unused"));
+            assert_eq!(
+                pane.view_mode, mode,
+                "Startup must honor the pane's saved mode"
+            );
+            pane.active_tab = 1;
+            pane.reset_directory_view();
+            assert_eq!(
+                pane.view_mode, mode,
+                "Tab navigation must retain the current mode"
+            );
+            assert_eq!(pane.sort.key, SortKey::Size);
+            assert!(pane.show_hidden);
+            let encoded = toml_edit::ser::to_string(&pane.to_session()).unwrap();
+            let saved = toml_edit::de::from_str(&encoded).unwrap();
+            let restored = PaneState::from_session(&saved, VPath::from("/unused"));
+            assert_eq!(restored.view_mode, mode);
+        }
+    }
 }

@@ -10,6 +10,7 @@ pub(super) struct SidebarWidgets {
     pub(super) recent: gtk::Box,
     pub(super) workspaces: gtk::Box,
     pub(super) remotes: gtk::Box,
+    pub(super) devices: devices::DeviceSidebar,
     pub(super) places: Vec<(VPath, gtk::Button)>,
 }
 
@@ -30,7 +31,9 @@ pub(super) fn build_sidebar(
     let window_region = gtk::Box::new(gtk::Orientation::Horizontal, 0);
     window_region.add_css_class("sidebar-window-region");
     window_region.append(&window_controls(window));
-    sidebar.append(&window_region);
+    let window_handle = gtk::WindowHandle::new();
+    window_handle.set_child(Some(&window_region));
+    sidebar.append(&window_handle);
 
     let body = gtk::Box::new(gtk::Orientation::Vertical, 4);
     body.add_css_class("sidebar-scroll-content");
@@ -140,52 +143,8 @@ pub(super) fn build_sidebar(
     body.append(&bookmarks);
 
     // Permanent locations rank above history: drives and servers, then Recent and Workspaces.
-    let monitor = gio::VolumeMonitor::get();
-    let mut mounted_paths = BTreeSet::new();
-    let volumes = monitor.volumes();
-    if !volumes.is_empty() {
-        body.append(&sidebar_heading("Devices"));
-    }
-    for volume in volumes {
-        let button = sidebar_button(&volume.name(), "commander-hard-drive-symbolic");
-        if let Some(path) = volume.get_mount().and_then(|mount| mount.root().path()) {
-            mounted_paths.insert(path.clone());
-            let destination = VPath::from(path);
-            let drop_destination = destination.clone();
-            places.push((destination.clone(), button.clone()));
-            button.set_tooltip_text(Some(&destination.to_string()));
-            let input = sender.input_sender().clone();
-            button.connect_clicked(move |_| {
-                let _ = input.send(AppMsg::NavigateActive(destination.clone()));
-            });
-            install_file_drop_target(&button, sender, Rc::clone(&file_drag_ui), move |_| {
-                Some(drop_destination.clone())
-            });
-        } else {
-            let volume = volume.clone();
-            let input = sender.input_sender().clone();
-            button.add_css_class("sidebar-row-unmounted");
-            button.set_tooltip_text(Some("Mount and open"));
-            button.connect_clicked(move |_| {
-                let volume = volume.clone();
-                let operation = super::remote::mount_operation();
-                let input = input.clone();
-                glib::spawn_future_local(async move {
-                    if let Err(error) = volume
-                        .mount_future(gio::MountMountFlags::NONE, Some(&operation))
-                        .await
-                    {
-                        tracing::warn!(%error, "failed to mount volume");
-                        return;
-                    }
-                    if let Some(path) = volume.get_mount().and_then(|mount| mount.root().path()) {
-                        let _ = input.send(AppMsg::NavigateActive(VPath::from(path)));
-                    }
-                });
-            });
-        }
-        body.append(&button);
-    }
+    let devices = devices::DeviceSidebar::new(sender);
+    body.append(&devices.devices);
 
     body.append(&sidebar_section(
         "Remote Storage",
@@ -198,36 +157,7 @@ pub(super) fn build_sidebar(
     ));
     let remotes = gtk::Box::new(gtk::Orientation::Vertical, 2);
     body.append(&remotes);
-    let mut found_mount = false;
-    for mount in monitor.mounts() {
-        let Some(path) = mount.root().path() else {
-            continue;
-        };
-        if !mounted_paths.insert(path.clone()) {
-            continue;
-        }
-        found_mount = true;
-        let button = sidebar_button(&mount.name(), "commander-server-symbolic");
-        let destination = VPath::from(path);
-        let drop_destination = destination.clone();
-        places.push((destination.clone(), button.clone()));
-        button.set_tooltip_text(Some(&destination.to_string()));
-        let input = sender.input_sender().clone();
-        button.connect_clicked(move |_| {
-            let _ = input.send(AppMsg::NavigateActive(destination.clone()));
-        });
-        install_file_drop_target(&button, sender, Rc::clone(&file_drag_ui), move |_| {
-            Some(drop_destination.clone())
-        });
-        body.append(&button);
-    }
-    if !found_mount {
-        let empty = gtk::Label::new(Some("No mounted locations"));
-        empty.add_css_class("dim-label");
-        empty.add_css_class("sidebar-empty");
-        empty.set_xalign(0.0);
-        body.append(&empty);
-    }
+    body.append(&devices.mounts);
 
     body.append(&sidebar_section(
         "Workspaces",
@@ -280,6 +210,7 @@ pub(super) fn build_sidebar(
         recent,
         workspaces,
         remotes,
+        devices,
         places,
     }
 }

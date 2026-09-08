@@ -438,6 +438,10 @@ mod tests {
                     sidebar_visible: false,
                     preview_visible: false,
                     appearance: AppearanceMode::Dark,
+                    // Keep the eight-tab overflow fixture independent of the
+                    // default application window size and compositor display.
+                    window_width: 900,
+                    window_height: 600,
                     ..SessionState::default()
                 }),
                 keymap_overrides: startup.keymap_overrides,
@@ -451,7 +455,9 @@ mod tests {
         wait_until(|| {
             app.model().terminal_tabs.len() == 1 && !app.model().terminal_tabs[0].starting
         });
-        wait_until(|| app.widgets().terminal.surface.has_focus());
+        // Headless compositors may have no active seat. Assert the window's
+        // keyboard focus target independently of desktop activation.
+        wait_until(|| app.widgets().terminal.surface.is_focus());
         app.emit(AppMsg::TerminalInput(
             b"printf 'terminal tab one\\n'\n".to_vec(),
         ));
@@ -503,14 +509,14 @@ mod tests {
         wait_until(|| app.model().active_terminal == Some(first));
         drain_frames();
         assert_visible(&app.widgets().terminal.tabs, first);
-        assert!(app.widgets().terminal.surface.has_focus());
+        assert!(app.widgets().terminal.surface.is_focus());
         let select = app.widgets().terminal.tabs.rows.borrow()[&first]
             .select
             .clone();
         select.grab_focus();
         select.emit_clicked();
         drain_frames();
-        assert!(app.widgets().terminal.surface.has_focus());
+        assert!(app.widgets().terminal.surface.is_focus());
 
         // A background exit updates its badge without replacing widgets or stealing focus.
         let close = app.widgets().terminal.tabs.rows.borrow()[&first]
@@ -536,7 +542,7 @@ mod tests {
                 .text(),
             "Exited"
         );
-        assert!(close.has_focus());
+        assert!(close.is_focus());
 
         app.widgets().terminal.tabs.rows.borrow()[&last]
             .select

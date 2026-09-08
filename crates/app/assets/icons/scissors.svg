@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Original Commander glyph with expanded 2 px strokes. -->
+  <path fill="#000000" fill-rule="evenodd" d="M6 2a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4Zm0 10a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0 2a2 2 0 1 1 0 4 2 2 0 0 1 0-4Z"/>
+  <path fill="#000000" d="m7.414 8.828 12.879 12.879a1 1 0 0 0 1.414-1.414L8.828 7.414ZM7.414 15.172l3.172-3.172L12 13.414l-3.172 3.172ZM13.414 9.172l6.879-6.879a1 1 0 0 1 1.414 1.414L14.828 10.586Z"/>
+</svg>

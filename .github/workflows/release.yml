@@ -137,6 +137,20 @@ jobs:
         run: |
           python3 release.py --check --output dist/release
           python3 release.py --output dist/release
+      - name: Check native installation and upgrade on Ubuntu and Fedora
+        run: |
+          python3 release.py --formats deb,rpm --revision 2 --output "$RUNNER_TEMP/upgrade-packages"
+          python3 -B scripts/test-packages.py --runtime docker \
+            --initial dist/release --upgrade "$RUNNER_TEMP/upgrade-packages" \
+            --output target/package-checks
+      - name: Upload native package check logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package-checks-${{ matrix.arch }}
+          path: target/package-checks
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Verify checksums and smoke-test AppImage
         env:
           PACKAGE_ARCH: ${{ matrix.arch }}

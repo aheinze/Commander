@@ -302,7 +302,6 @@ paned > separator:hover {
 }
 .window-action image { -gtk-icon-size: 14px; }
 .window-action:hover { color: @carelo_text; background: @carelo_hover; }
-.window-close:hover { color: #ffffff; background: #bc3543; }
 
 .sidebar-scroll-content {
   padding: 4px 10px 10px 10px;
@@ -461,9 +460,14 @@ paned > separator:hover {
 
 .pane-tabs {
   min-height: 28px;
-  padding: 3px 8px;
+  padding: 7px 8px;
   border-bottom: 1px solid @carelo_separator;
   background: @carelo_pane;
+}
+
+/* Keep the active pane visible when focus moves to search or other controls. */
+.pane-active .pane-tabs {
+  box-shadow: inset 0 2px @carelo_accent;
 }
 
 .pane-tab {
@@ -618,6 +622,19 @@ paned > separator:hover {
   background: @carelo_hover;
 }
 
+.breadcrumb-button.current-folder { color: @carelo_text; }
+.breadcrumb-icon > button {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+}
+.breadcrumb-icon > button:hover { background: @carelo_hover; }
+.breadcrumb-ancestors list { background: transparent; }
+.breadcrumb-ancestors row { border-radius: 4px; }
+
 .breadcrumb-separator {
   color: @carelo_faint;
   font-size: 13px;
@@ -636,6 +653,18 @@ paned > separator:hover {
   color: #ff6b68;
   background: @carelo_hover;
 }
+
+.sidebar-device-eject {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 4px;
+  color: @carelo_faint;
+  background: transparent;
+}
+.sidebar-device-eject image { -gtk-icon-size: 14px; }
+.sidebar-device-eject:hover { color: @carelo_text; background: @carelo_hover; }
+.sidebar-device-status { margin: 4px 9px; font-size: 12px; color: @carelo_muted; }
 
 .favorite-group-heading {
   min-height: 27px;
@@ -910,22 +939,22 @@ paned > separator:hover {
 .tag-purple { color: #b78cff; }
 
 .file-context-menu contents {
-  min-width: 266px;
-  padding: 0;
+  min-width: 300px;
+  padding: 4px;
   border: 1px solid @carelo_menu_border;
-  border-radius: 4px;
+  border-radius: 8px;
   color: @carelo_menu_text;
   background-color: @carelo_menu;
   box-shadow: none;
 }
 
 .context-menu-search {
-  min-height: 29px;
-  margin: 6px 6px 3px;
+  min-height: 32px;
+  margin: 2px 5px 7px;
   border: 1px solid @carelo_menu_border;
   border-radius: 4px;
   color: @carelo_menu_text;
-  font-size: 11px;
+  font-size: 14px;
   background: @carelo_menu_control;
   box-shadow: none;
 }
@@ -936,16 +965,16 @@ paned > separator:hover {
 }
 
 .context-menu-title {
-  min-height: 24px;
-  padding: 0 11px 1px;
-  color: @carelo_menu_muted;
-  font-size: 10.5px;
+  min-height: 32px;
+  padding: 0 9px 2px;
+  color: @carelo_menu_text;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .context-menu-title .dim-label {
   color: @carelo_menu_faint;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 500;
 }
 
@@ -958,6 +987,21 @@ paned > separator:hover {
   font-weight: 400;
   background: transparent;
 }
+
+.file-context-menu .context-menu-item {
+  min-height: 34px;
+  font-size: 14px;
+  border-radius: 5px;
+}
+
+.file-context-menu .context-menu-item:focus-visible {
+  background: alpha(@carelo_accent, 0.13);
+  outline: 1px solid alpha(@carelo_accent, 0.55);
+  outline-offset: -1px;
+}
+.file-context-menu .context-menu-separator { margin: 5px 7px; }
+.context-menu-back { margin: 0 5px 5px; }
+.file-context-menu .context-menu-more { margin-top: 5px; }
 
 .context-menu-item:hover {
   background: @carelo_hover;
@@ -979,6 +1023,8 @@ paned > separator:hover {
   font-size: 10px;
   font-weight: 400;
 }
+
+.file-context-menu .context-menu-shortcut { font-size: 12px; }
 
 .context-menu-item:hover .context-menu-shortcut {
   color: @carelo_menu_muted;
@@ -1007,7 +1053,7 @@ paned > separator:hover {
   min-height: 56px;
   padding: 10px;
   color: @carelo_menu_faint;
-  font-size: 10px;
+  font-size: 13px;
 }
 
 .context-tag-row {
@@ -1016,7 +1062,7 @@ paned > separator:hover {
   padding: 4px 9px 2px;
   border-top: 1px solid @carelo_menu_separator;
   color: @carelo_menu_muted;
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .context-tag-button {
@@ -1089,7 +1135,7 @@ paned > separator:hover {
   box-shadow: inset 0 -1px alpha(@carelo_accent, 0.60);
 }
 
-.miller-column:not(.miller-current) .column-browser row:selected {
+.column-browser row:not(:selected) .miller-path {
   background: @carelo_hover;
   color: @carelo_text;
 }
@@ -1275,20 +1321,22 @@ paned > separator:hover {
 }
 
 .inspector-section {
-  margin: 0 18px 16px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  margin: 0 12px 12px;
+  padding: 0 12px 8px;
+  border: 1px solid @carelo_separator;
+  border-radius: 12px;
+  background: mix(@carelo_pane, @carelo_control, 0.35);
 }
 
-.inspector-section-git {
-  border: 0;
-  background: transparent;
-}
-
+.inspector-section > .section-title,
 .inspector-section-header {
-  padding-right: 0;
+  min-height: 40px;
+  margin-bottom: 4px;
+  padding: 0;
   border-bottom: 1px solid @carelo_separator;
+  color: @carelo_text;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .inspector-section-header .section-title {
@@ -1300,9 +1348,11 @@ paned > separator:hover {
   font-weight: 600;
 }
 
-.git-commit-row {
-  padding-top: 7px;
+.inspector-row.git-commit-row {
+  margin-top: 4px;
+  padding-top: 10px;
   padding-bottom: 8px;
+  border-top: 1px solid @carelo_separator;
 }
 
 .git-commit-subject {
@@ -1371,31 +1421,46 @@ paned > separator:hover {
 }
 
 .inspector-key {
-  color: @carelo_faint;
-  font-size: 11px;
+  color: @carelo_muted;
+  font-size: 11.5px;
 }
 
 .inspector-value {
-  color: @carelo_muted;
-  font-size: 11px;
+  color: @carelo_text;
+  font-size: 12px;
   font-weight: 500;
 }
 
+.inspector-path-row {
+  padding: 7px 0 10px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid @carelo_separator;
+}
+
+.inspector-path-row .inspector-value { font-size: 11.5px; }
+
+.inspector-code-value {
+  font-family: monospace;
+  font-size: 11.5px;
+}
+
 .permission-edit-button {
-  min-height: 30px;
-  margin: 9px 10px 10px 10px;
-  padding: 0 11px;
-  border-radius: 4px;
-  color: @carelo_accent;
+  min-height: 32px;
+  margin: 8px 0 4px;
+  padding: 0 12px;
+  border-radius: 6px;
+  color: mix(@carelo_accent, @carelo_text, 0.45);
   background: alpha(@carelo_accent, 0.09);
   box-shadow: none;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 600;
 }
 
 .permission-edit-button:hover {
   background: alpha(@carelo_accent, 0.16);
 }
+
+.permission-edit-button:active { background: alpha(@carelo_accent, 0.22); }
 
 .inspector-page {
   min-height: 0;
@@ -1862,13 +1927,19 @@ dialog.command-palette-dialog sheet {
   font-size: 11px;
 }
 
-.quick-look-dialog textview,
-.quick-look-dialog textview > text {
-  padding: 12px 16px;
-  color: currentColor;
-  background: color-mix(in srgb, currentColor 3%, transparent);
+.quick-look-dialog .quick-look-text {
+  padding: 0;
+  border-radius: 0;
+  color: var(--dialog-fg-color);
+  background: var(--dialog-bg-color);
   font-family: monospace;
   font-size: 11.5px;
+}
+
+.quick-look-dialog .quick-look-text > text {
+  padding: 0;
+  color: inherit;
+  background: transparent;
 }
 
 .quick-look-dialog .quick-look-status {
@@ -2111,8 +2182,12 @@ dialog.command-palette-dialog sheet {
 
 .search-status {
   padding: 10px 22px 6px;
-  color: color-mix(in srgb, currentColor 45%, transparent);
-  font-size: 11.5px;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  font-size: 13px;
+}
+
+.search-status.warning {
+  color: var(--warning-color);
 }
 
 .search-results {
@@ -2533,7 +2608,8 @@ dialog .dialog-hint {
   min-height: 36px;
 }
 
-.dialog-actions button {
+.dialog-actions button,
+.tools-dialog .tool-button {
   min-height: 34px;
   padding: 0 16px;
   border: 0;
@@ -2546,16 +2622,19 @@ dialog .dialog-hint {
   transition: background 90ms ease-out;
 }
 
-.dialog-actions button:hover {
+.dialog-actions button:hover,
+.tools-dialog .tool-button:hover {
   background: color-mix(in srgb, currentColor 13%, transparent);
 }
 
-.dialog-actions button.suggested-action {
+.dialog-actions button.suggested-action,
+.tools-dialog .tool-button.suggested-action {
   color: var(--accent-fg-color);
   background: var(--accent-bg-color);
 }
 
-.dialog-actions button.suggested-action:hover {
+.dialog-actions button.suggested-action:hover,
+.tools-dialog .tool-button.suggested-action:hover {
   background: color-mix(in srgb, var(--accent-bg-color) 88%, white);
 }
 
@@ -2581,6 +2660,70 @@ dialog .dialog-hint {
 .settings-link:hover {
   color: color-mix(in srgb, var(--accent-color) 80%, white);
   background: transparent;
+}
+
+/* Context-menu tools use the shared utility-dialog controls and form rhythm. */
+.tools-dialog { font-size: 13px; }
+.tools-dialog .tool-caption {
+  color: @carelo_muted;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.tools-dialog .tool-field-label { font-size: 13px; font-weight: 500; }
+.tools-dialog .tool-form-row > label { font-size: 12.5px; }
+.tools-dialog .tool-list {
+  background: transparent;
+  border-top: 1px solid @carelo_separator;
+}
+.tools-dialog .tool-list > row { padding: 0; }
+.tools-dialog .tool-list > row + row { border-top: 1px solid @carelo_separator; }
+.tools-dialog .tool-row { padding: 12px 0; }
+.tools-dialog .tool-row-title { font-size: 13px; font-weight: 500; }
+.tools-dialog .tool-row-command {
+  font-family: monospace;
+  font-size: 12px;
+  color: @carelo_muted;
+}
+.tools-dialog .tool-row button {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 4px;
+  color: @carelo_icon;
+  background: transparent;
+  box-shadow: none;
+}
+.tools-dialog .tool-row button:hover {
+  color: @carelo_text;
+  background: @carelo_hover;
+}
+.tools-dialog .tool-empty { padding: 20px; }
+.tools-dialog .tool-empty-icon { color: @carelo_icon; margin-bottom: 4px; }
+.tools-dialog .tool-field-error { color: var(--error-color); font-size: 12px; }
+.tools-dialog .tool-command-example {
+  margin-top: 6px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.tools-dialog .tool-undo {
+  padding: 8px 0 0;
+  border-top: 1px solid @carelo_separator;
+}
+.tools-dialog expander { font-size: 12.5px; }
+.tools-dialog expander > box > title { min-height: 26px; }
+.tools-dialog .tool-placeholder-menu > button {
+  min-height: 26px;
+  padding: 0;
+  border-radius: 0;
+  color: var(--accent-color);
+  background: transparent;
+  box-shadow: none;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.tools-dialog .tool-placeholder-menu > button:hover {
+  color: color-mix(in srgb, var(--accent-color) 80%, white);
 }
 
 .dialog-editor {

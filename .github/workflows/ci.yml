@@ -21,13 +21,31 @@ jobs:
         with:
           components: clippy,rustfmt
       - name: Install native UI dependencies
-        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev xvfb
+        run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev libadwaita-1-dev xvfb xauth dbus-daemon mutter gvfs gvfs-backends gvfs-fuse fuse3 python3-venv
       - name: Check formatting
         run: cargo fmt --all --check
       - name: Lint all targets
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Run workspace tests
         run: cargo test --workspace --locked
+      - name: Run isolated native interaction regressions
+        run: python3 scripts/test-native.py --backend wayland --output target/native-ci
+      - name: Check real FTP login, copying, and connection loss
+        run: |
+          python3 -m venv "$RUNNER_TEMP/ftp-tests"
+          "$RUNNER_TEMP/ftp-tests/bin/pip" install pyftpdlib==2.1.0
+          "$RUNNER_TEMP/ftp-tests/bin/python" -B scripts/test-ftp.py --output target/ftp-ci
+      - name: Upload native regression logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-regressions
+          path: |
+            target/native-ci
+            target/ftp-ci
+          if-no-files-found: ignore
+      - name: Test release packaging helpers
+        run: python3 -B -m unittest discover -s packaging -p 'test_*.py'
       - name: Build GTK-free headless crates
         run: cargo check -p dualpane-core -p dualpane-vfs -p dualpane-engine -p dualpane-index
       - name: Generate the flat 100k-entry fixture

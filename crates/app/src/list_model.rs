@@ -126,7 +126,9 @@ mod imp {
             } else {
                 self.publish_selection(0, 0, Some(position));
             }
-            changed
+            // GTK uses this result to decide whether to try a fallback action;
+            // an already-applied selection is still a supported operation.
+            true
         }
 
         fn select_range(&self, position: u32, n_items: u32, unselect_rest: bool) -> bool {
@@ -137,23 +139,29 @@ mod imp {
                 .filter_map(|row| self.selection_key(row))
                 .collect();
             if keys.is_empty() {
-                return false;
+                return true;
             }
             let mut selection = self.selection.borrow_mut();
+            let previous = selection.clone();
             if unselect_rest {
                 selection.clear();
             }
-            let mut changed = false;
             for key in keys {
-                changed |= selection.select_preserving_anchor(key);
+                selection.select_preserving_anchor(key);
             }
+            let changed = *selection != previous;
             drop(selection);
             if changed {
-                self.publish_selection(position, end - position, end.checked_sub(1));
+                if unselect_rest {
+                    // Rows outside the new range may have been deselected.
+                    self.publish_selection(0, self.published_items.get(), end.checked_sub(1));
+                } else {
+                    self.publish_selection(position, end - position, end.checked_sub(1));
+                }
             } else {
                 self.publish_selection(0, 0, end.checked_sub(1));
             }
-            changed
+            true
         }
 
         fn set_selection(&self, selected: &gtk::Bitset, mask: &gtk::Bitset) -> bool {
@@ -183,7 +191,7 @@ mod imp {
                 } else if selected_row.is_some() {
                     self.publish_selection(0, 0, selected_row);
                 }
-                return changed;
+                return true;
             }
 
             let mut changed = false;
@@ -191,7 +199,7 @@ mod imp {
             let mut selected_row = None;
             let mut requested_selected_row = None;
             let Some((iter, first)) = gtk::BitsetIter::init_first(mask) else {
-                return false;
+                return true;
             };
             for position in std::iter::once(first).chain(iter) {
                 if position >= item_count {
@@ -221,12 +229,12 @@ mod imp {
             } else if cursor_row.is_some() {
                 self.publish_selection(0, 0, cursor_row);
             }
-            changed
+            true
         }
 
         fn unselect_all(&self) -> bool {
             if self.selection.borrow().is_empty() {
-                return false;
+                return true;
             }
             self.selection.borrow_mut().clear();
             self.publish_selection(0, self.published_items.get(), None);
@@ -238,7 +246,7 @@ mod imp {
                 return false;
             };
             if !self.selection.borrow_mut().deselect(&key) {
-                return false;
+                return true;
             }
             self.publish_selection(position, 1, Some(position));
             true
@@ -260,7 +268,7 @@ mod imp {
             if changed {
                 self.publish_selection(position, end - position, Some(position));
             }
-            changed
+            true
         }
     }
 

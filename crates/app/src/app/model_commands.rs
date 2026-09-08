@@ -248,7 +248,6 @@ impl AppModel {
             self.appearance,
             self.color_theme,
             self.parallel_transfers,
-            self.custom_tools.clone(),
             sender,
         );
         None

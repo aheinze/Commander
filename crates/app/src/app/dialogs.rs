@@ -2,6 +2,9 @@
 
 use super::*;
 
+#[path = "custom_tools.rs"]
+mod custom_tools;
+
 pub(super) fn show_new_directory_dialog(sender: &ComponentSender<AppModel>) {
     let Some(window) = relm4::main_application().active_window() else {
         return;
@@ -158,6 +161,50 @@ pub(super) fn show_new_favorite_group_dialog(sender: &ComponentSender<AppModel>)
     name.grab_focus();
 }
 
+pub(super) fn show_rename_favorite_dialog(
+    group: Option<usize>,
+    path: &VPath,
+    name: &str,
+    input: relm4::Sender<AppMsg>,
+) {
+    let Some(window) = relm4::main_application().active_window() else {
+        return;
+    };
+    let dialog = AlertSheet::new(
+        Some("Rename Favorite"),
+        Some("Change this shortcut’s label. The folder name stays the same."),
+    );
+    dialog.add_response("cancel", "Cancel");
+    dialog.add_response("rename", "Rename");
+    dialog.set_close_response("cancel");
+    dialog.set_default_response(Some("rename"));
+    dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    let entry = gtk::Entry::new();
+    entry.update_property(&[gtk::accessible::Property::Label("Favorite name")]);
+    entry.set_text(name);
+    entry.set_activates_default(true);
+    content.append(&entry);
+    let hint = gtk::Label::new(Some("Leave blank to use the folder name."));
+    hint.set_xalign(0.0);
+    hint.set_wrap(true);
+    hint.add_css_class("alert-body");
+    content.append(&hint);
+    dialog.set_extra_child(Some(&content));
+    let path = path.clone();
+    let response_entry = entry.clone();
+    dialog.connect_response(Some("rename"), move |_, _| {
+        let _ = input.send(AppMsg::RenameFavorite {
+            group,
+            path: path.clone(),
+            name: response_entry.text().to_string(),
+        });
+    });
+    dialog.present(Some(&window));
+    entry.grab_focus();
+    entry.select_region(0, -1);
+}
+
 pub(super) fn connect_remote_uri(
     connection: super::remote::RemoteConnection,
     sender: &ComponentSender<AppModel>,
@@ -174,7 +221,6 @@ pub(super) fn show_settings_dialog(
     appearance: AppearanceMode,
     color_theme: ColorTheme,
     parallel_transfers: bool,
-    custom_tools: Vec<CustomToolSession>,
     sender: &ComponentSender<AppModel>,
 ) {
     let Some(parent) = relm4::main_application().active_window() else {
@@ -238,15 +284,15 @@ pub(super) fn show_settings_dialog(
         "Disable to process file payloads sequentially while preserving the job queue",
     ));
     content.append(&parallel);
-    let custom_tools_button = gtk::Button::with_label("Edit Context Menu Tools…");
+    let custom_tools_button = gtk::Button::with_label("Manage Context Menu Tools…");
     custom_tools_button.set_halign(gtk::Align::Start);
     custom_tools_button.set_margin_top(6);
     custom_tools_button.add_css_class("flat");
     custom_tools_button.add_css_class("settings-link");
     {
-        let sender = sender.clone();
+        let input = sender.input_sender().clone();
         custom_tools_button.connect_clicked(move |_| {
-            show_custom_tools_dialog(custom_tools.clone(), &sender);
+            let _ = input.send(AppMsg::ManageCustomTools);
         });
     }
     content.append(&custom_tools_button);
@@ -304,102 +350,7 @@ pub(super) fn show_custom_tools_dialog(
     let Some(parent) = relm4::main_application().active_window() else {
         return;
     };
-    let (dialog, view) = utility_dialog("Context Menu Tools", 640, 440, "tools-dialog");
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let body = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    body.add_css_class("dialog-body");
-    body.set_vexpand(true);
-    let description = gtk::Label::new(Some(
-        "One tool per line: Name | command | both/files/folders | extensions. Placeholders: %path%, %paths%, %name%, %parent%.",
-    ));
-    description.set_xalign(0.0);
-    description.set_wrap(true);
-    description.add_css_class("dim-label");
-    body.append(&description);
-    let editor = gtk::TextView::new();
-    editor.set_monospace(true);
-    editor.set_wrap_mode(gtk::WrapMode::None);
-    editor.buffer().set_text(
-        &tools
-            .iter()
-            .map(|tool| {
-                format!(
-                    "{}{} | {} | {} | {}",
-                    if tool.enabled { "" } else { "!" },
-                    tool.name,
-                    tool.command,
-                    tool.applies_to,
-                    tool.extensions
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-    );
-    let scroll = gtk::ScrolledWindow::builder()
-        .min_content_height(220)
-        .hexpand(true)
-        .vexpand(true)
-        .child(&editor)
-        .build();
-    scroll.add_css_class("dialog-editor");
-    body.append(&scroll);
-    root.append(&body);
-    let actions = dialog_actions();
-    let cancel = gtk::Button::with_label("Cancel");
-    let save = gtk::Button::with_label("Save Tools");
-    save.add_css_class("suggested-action");
-    actions.append(&cancel);
-    actions.append(&save);
-    root.append(&actions);
-    view.set_content(Some(&root));
-    {
-        let dialog = dialog.clone();
-        cancel.connect_clicked(move |_| {
-            dialog.close();
-        });
-    }
-    let input = sender.input_sender().clone();
-    let response_editor = editor.clone();
-    let response_dialog = dialog.clone();
-    save.connect_clicked(move |_| {
-        let buffer = response_editor.buffer();
-        let content = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false);
-        let tools = content
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with('#') {
-                    return None;
-                }
-                let mut fields = line.splitn(4, '|').map(str::trim);
-                let raw_name = fields.next()?;
-                let command = fields.next()?.to_owned();
-                if raw_name.is_empty() || command.is_empty() {
-                    return None;
-                }
-                let enabled = !raw_name.starts_with('!');
-                let name = raw_name.trim_start_matches('!').trim().to_owned();
-                let applies_to = fields.next().unwrap_or("both").to_ascii_lowercase();
-                let applies_to = if matches!(applies_to.as_str(), "files" | "folders") {
-                    applies_to
-                } else {
-                    "both".to_owned()
-                };
-                let extensions = fields.next().unwrap_or_default().to_owned();
-                Some(CustomToolSession {
-                    name,
-                    command,
-                    applies_to,
-                    extensions,
-                    enabled,
-                })
-            })
-            .collect();
-        let _ = input.send(AppMsg::SetCustomTools(tools));
-        response_dialog.close();
-    });
-    dialog.present(Some(&parent));
-    editor.grab_focus();
+    custom_tools::show(&parent, tools, sender.input_sender().clone());
 }
 
 pub(super) fn show_shortcut_reference(keymap: &Keymap) {
@@ -1231,107 +1182,6 @@ pub(super) fn show_elevated_permissions_dialog(
             recursive,
         });
     });
-    dialog.present(Some(&window));
-}
-
-pub(super) fn show_compare_results(
-    result: Result<Vec<CompareEntry>, String>,
-    left: VPath,
-    right: VPath,
-    sender: &ComponentSender<AppModel>,
-) {
-    let Some(window) = relm4::main_application().active_window() else {
-        return;
-    };
-    let mut sync_entries = None;
-    let (heading, body) = match result {
-        Ok(entries) => {
-            let changed: Vec<_> = entries
-                .iter()
-                .filter(|entry| entry.status != CompareStatus::Same)
-                .collect();
-            let left_only = changed
-                .iter()
-                .filter(|entry| entry.status == CompareStatus::LeftOnly)
-                .count();
-            let right_only = changed
-                .iter()
-                .filter(|entry| entry.status == CompareStatus::RightOnly)
-                .count();
-            let different = changed
-                .iter()
-                .filter(|entry| entry.status == CompareStatus::Different)
-                .count();
-            let mut body = format!(
-                "{left_only} left only · {right_only} right only · {different} different\n\n"
-            );
-            for entry in changed.iter().take(80) {
-                let marker = match entry.status {
-                    CompareStatus::LeftOnly => "←",
-                    CompareStatus::RightOnly => "→",
-                    CompareStatus::Different => "≠",
-                    CompareStatus::Same => "=",
-                };
-                let left_size = entry.left.as_ref().map_or(0, |metadata| metadata.size);
-                let right_size = entry.right.as_ref().map_or(0, |metadata| metadata.size);
-                body.push_str(&format!(
-                    "{marker} {}  ({} / {})\n",
-                    entry.relative_path.display(),
-                    left_size,
-                    right_size
-                ));
-            }
-            if changed.len() > 80 {
-                body.push_str(&format!("\n…and {} more", changed.len() - 80));
-            }
-            let summary = (
-                if changed.is_empty() {
-                    "Folders Match"
-                } else {
-                    "Folder Comparison"
-                },
-                body,
-            );
-            sync_entries = Some(entries);
-            summary
-        }
-        Err(error) => ("Folder Comparison Failed", error),
-    };
-    let dialog = AlertSheet::new(Some(heading), Some(&body));
-    dialog.add_response("close", "Close");
-    dialog.set_close_response("close");
-    if let Some(entries) = sync_entries {
-        let has_changes = entries
-            .iter()
-            .any(|entry| entry.status != CompareStatus::Same);
-        if has_changes {
-            dialog.add_response("to-left", "Sync → Left");
-            dialog.add_response("to-right", "Sync → Right");
-            dialog.set_default_response(Some("to-right"));
-            dialog.set_response_appearance("to-right", adw::ResponseAppearance::Suggested);
-            let mirror = gtk::CheckButton::with_label(
-                "Mirror destination (move destination-only items to Trash)",
-            );
-            dialog.set_extra_child(Some(&mirror));
-            let input = sender.input_sender().clone();
-            dialog.connect_response(None, move |_, response| {
-                let direction = match response {
-                    "to-left" => Some(SyncDirection::RightToLeft),
-                    "to-right" => Some(SyncDirection::LeftToRight),
-                    _ => None,
-                };
-                if let Some(direction) = direction {
-                    let _ = input.send(AppMsg::SyncCompared {
-                        left: left.clone(),
-                        right: right.clone(),
-                        entries: entries.clone(),
-                        direction,
-                        mirror: mirror.is_active(),
-                    });
-                }
-            });
-        }
-    }
     dialog.present(Some(&window));
 }
 

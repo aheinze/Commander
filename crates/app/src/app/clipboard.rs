@@ -114,6 +114,17 @@ async fn read_files(clipboard: &gdk::Clipboard) -> Result<(Vec<VPath>, bool), St
 
 impl AppModel {
     pub(super) fn paste_file_clipboard(&mut self, sender: &ComponentSender<Self>) {
+        let pane = self.active_pane;
+        let destination = self.pane(pane).current_directory().clone();
+        self.paste_file_clipboard_into(pane, destination, sender);
+    }
+
+    pub(super) fn paste_file_clipboard_into(
+        &mut self,
+        pane: PaneId,
+        destination: VPath,
+        sender: &ComponentSender<Self>,
+    ) {
         let Some(display) = gdk::Display::default() else {
             return;
         };
@@ -123,8 +134,6 @@ impl AppModel {
             .as_ref()
             .filter(|provider| clipboard.content().as_ref() == Some(*provider))
             .map(|_| self.clipboard_generation);
-        let pane = self.active_pane;
-        let destination = self.pane(pane).current_directory().clone();
         let input = sender.input_sender().clone();
         glib::spawn_future_local(async move {
             let changed = Rc::new(Cell::new(false));

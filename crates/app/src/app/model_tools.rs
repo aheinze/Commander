@@ -8,10 +8,6 @@ impl AppModel {
         options: SearchOptions,
         sender: &ComponentSender<Self>,
     ) {
-        if options.query.trim().is_empty() {
-            self.search_error = Some("Enter a name, path, or content query".to_owned());
-            return;
-        }
         if let Some(cancel) = self.search_cancel.take() {
             cancel.cancel();
         }
@@ -19,7 +15,7 @@ impl AppModel {
         let generation = self.search_generation;
         self.search_loading = true;
         self.search_error = None;
-        self.search_results.clear();
+        self.search_results = SearchResults::default();
         let root = self.pane(self.active_pane).current_directory().clone();
         let cancel = CancelToken::new();
         self.search_cancel = Some(cancel.clone());
@@ -41,73 +37,13 @@ impl AppModel {
     }
 
     pub(super) fn start_compare(&mut self, sender: &ComponentSender<Self>) {
-        if let Some(cancel) = self.tool_cancel.take() {
-            cancel.cancel();
-        }
-        let left = self.pane(PaneId::Left).current_directory().clone();
-        let right = self.pane(PaneId::Right).current_directory().clone();
-        let cancel = CancelToken::new();
-        self.tool_cancel = Some(cancel.clone());
-        let vfs = Arc::clone(&self.vfs);
-        let input = sender.input_sender().clone();
-        match thread::Builder::new()
-            .name("dualpane-compare".to_owned())
-            .spawn(move || {
-                let result = compare_directories(vfs.as_ref(), &left, &right, &cancel);
-                let _ = input.send(AppMsg::CompareReady {
-                    left,
-                    right,
-                    result,
-                });
-            }) {
-            Ok(worker) => self.aux_workers.push(worker),
-            Err(error) => {
-                self.tool_cancel = None;
-                self.pane_mut(self.active_pane).error =
-                    Some(format!("Could not start folder compare: {error}"));
-            }
-        }
-    }
-
-    pub(super) fn start_sync(
-        &mut self,
-        left: VPath,
-        right: VPath,
-        entries: Vec<CompareEntry>,
-        direction: SyncDirection,
-        mirror: bool,
-        sender: &ComponentSender<Self>,
-    ) {
-        if let Some(cancel) = self.tool_cancel.take() {
-            cancel.cancel();
-        }
-        let cancel = CancelToken::new();
-        self.tool_cancel = Some(cancel.clone());
-        let vfs = Arc::clone(&self.vfs);
-        let engine = self.operation_engine.clone();
-        let input = sender.input_sender().clone();
-        match thread::Builder::new()
-            .name("dualpane-folder-sync".to_owned())
-            .spawn(move || {
-                let result = sync_from_compare(
-                    vfs.as_ref(),
-                    engine,
-                    &left,
-                    &right,
-                    &entries,
-                    direction,
-                    mirror,
-                    &cancel,
-                );
-                let _ = input.send(AppMsg::SyncReady(result));
-            }) {
-            Ok(worker) => self.aux_workers.push(worker),
-            Err(error) => {
-                self.tool_cancel = None;
-                self.pane_mut(self.active_pane).error =
-                    Some(format!("Could not start folder synchronization: {error}"));
-            }
-        }
+        let _ = compare_view::show(
+            Arc::clone(&self.vfs),
+            self.operation_engine.clone(),
+            self.pane(PaneId::Left).current_directory().clone(),
+            self.pane(PaneId::Right).current_directory().clone(),
+            sender.input_sender().clone(),
+        );
     }
 
     pub(super) fn start_checksum(&mut self, sender: &ComponentSender<Self>) {
@@ -524,8 +460,15 @@ impl AppModel {
 
     pub(super) fn on_close_search(&mut self) {
         self.search_open = false;
+        self.on_cancel_search();
+    }
+
+    pub(super) fn on_cancel_search(&mut self) {
+        // Late completions must not replace a closed or newly opened search.
+        self.search_generation = self.search_generation.wrapping_add(1);
         if let Some(cancel) = self.search_cancel.take() {
             cancel.cancel();
+            self.search_error = Some("Search stopped".to_owned());
         }
         self.search_loading = false;
     }
@@ -533,7 +476,7 @@ impl AppModel {
     pub(super) fn on_search_ready(
         &mut self,
         generation: u64,
-        result: Result<Vec<SearchHit>, String>,
+        result: Result<SearchResults, String>,
     ) {
         if generation == self.search_generation {
             self.search_loading = false;
@@ -544,34 +487,11 @@ impl AppModel {
                     self.search_error = None;
                 }
                 Err(error) => {
-                    self.search_results.clear();
+                    self.search_results = SearchResults::default();
                     self.search_error = Some(error);
                 }
             }
         }
-    }
-
-    pub(super) fn on_compare_ready(
-        &mut self,
-        left: VPath,
-        right: VPath,
-        result: Result<Vec<CompareEntry>, String>,
-        sender: &ComponentSender<Self>,
-    ) {
-        self.tool_cancel = None;
-        show_compare_results(result, left, right, sender);
-    }
-
-    pub(super) fn on_sync_compared(
-        &mut self,
-        left: VPath,
-        right: VPath,
-        entries: Vec<CompareEntry>,
-        direction: SyncDirection,
-        mirror: bool,
-        sender: &ComponentSender<Self>,
-    ) {
-        self.start_sync(left, right, entries, direction, mirror, sender)
     }
 
     pub(super) fn on_sync_ready(
@@ -579,7 +499,6 @@ impl AppModel {
         result: Result<usize, String>,
         sender: &ComponentSender<Self>,
     ) {
-        self.tool_cancel = None;
         match result {
             Ok(count) => {
                 self.push_operation_log(format!("Folder synchronization applied {count} change(s)"))

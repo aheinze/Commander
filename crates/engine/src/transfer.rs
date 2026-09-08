@@ -1250,15 +1250,21 @@ fn copy_buffered(
     let mut source = vfs
         .open_read(&entry.source)
         .map_err(|error| JobError::from_vfs(entry.source.clone(), "open source", &error))?;
-    source
-        .seek(SeekFrom::Start(offset))
-        .map_err(|error| io_job_error(entry.source.clone(), "seek source", error))?;
+    // Fresh streams already start at zero. GVfs FTP streams can be readable
+    // without supporting seek, including a redundant seek to byte zero.
+    if offset > 0 {
+        source
+            .seek(SeekFrom::Start(offset))
+            .map_err(|error| io_job_error(entry.source.clone(), "seek source", error))?;
+    }
     let mut destination = vfs
         .open_write(temp)
         .map_err(|error| JobError::from_vfs(temp.clone(), "open destination", &error))?;
-    destination
-        .seek(SeekFrom::Start(offset))
-        .map_err(|error| io_job_error(temp.clone(), "seek destination", error))?;
+    if offset > 0 {
+        destination
+            .seek(SeekFrom::Start(offset))
+            .map_err(|error| io_job_error(temp.clone(), "seek destination", error))?;
+    }
     let mut buffer = vec![0_u8; buffer_size(entry.metadata.size)];
     let copied = copy_stream_range(
         &mut *source,

@@ -243,6 +243,7 @@ impl AppModel {
             preview_visible: self.preview_visible,
             preview_width: self.preview_width,
             bookmarks: self.bookmarks.iter().map(ToString::to_string).collect(),
+            bookmark_labels: self.bookmark_labels.clone(),
             favorite_groups: self.favorite_groups.clone(),
             recent: self.recent.iter().map(ToString::to_string).collect(),
             window_width: self.window_width,

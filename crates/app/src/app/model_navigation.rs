@@ -241,7 +241,21 @@ impl AppModel {
     }
 
     pub(super) fn navigate(&mut self, pane: PaneId, path: VPath, sender: &ComponentSender<Self>) {
-        self.navigate_to(pane, path, None, sender);
+        self.navigate_to(pane, path, None, true, sender);
+    }
+
+    pub(super) fn navigate_exact(
+        &mut self,
+        pane: PaneId,
+        path: VPath,
+        sender: &ComponentSender<Self>,
+    ) {
+        if self.pane(pane).current_directory() == &path {
+            self.active_pane = pane;
+            self.focus_active_files();
+            return;
+        }
+        self.navigate_to(pane, path, None, false, sender);
     }
 
     pub(super) fn reveal_path(
@@ -251,7 +265,7 @@ impl AppModel {
         sender: &ComponentSender<Self>,
     ) {
         if let Some(parent) = path.parent() {
-            self.navigate_to(pane, parent, Some(path), sender);
+            self.navigate_to(pane, parent, Some(path), false, sender);
         } else {
             self.navigate(pane, path, sender);
         }
@@ -262,20 +276,46 @@ impl AppModel {
         pane: PaneId,
         path: VPath,
         reveal: Option<VPath>,
+        restore_branch: bool,
         sender: &ComponentSender<Self>,
     ) {
         self.active_pane = pane;
         self.focus_active_files();
         self.record_recent(path.clone());
-        self.pane_mut(pane).remember_navigation();
-        self.pane_mut(pane).active_mut().navigate(path);
-        self.pane_mut(pane).reset_directory_view();
+        let state = self.pane_mut(pane);
+        state.remember_navigation();
+        if !restore_branch && state.current_directory() != &state.active().path {
+            // Back should return to the folder we were browsing, including a Miller leaf.
+            let previous = state.current_directory().clone();
+            let selected_names = state
+                .locations
+                .get(&state.active().path.to_string())
+                .map(|location| location.selected_names.clone())
+                .unwrap_or_default();
+            state.locations.insert(
+                previous.to_string(),
+                NavigationSession {
+                    columns: vec![previous.to_string()],
+                    selected_names,
+                    horizontal_scroll: 0,
+                },
+            );
+            state.active_mut().navigate(previous);
+        }
+        state.active_mut().navigate(path);
+        state.reset_directory_view();
+        if !restore_branch {
+            // An explicit breadcrumb or location must end at the requested folder.
+            if state.miller_columns.len() > 1 {
+                state.restore_names.clear();
+            }
+            state.miller_columns.truncate(1);
+        }
         if let Some(target) = reveal {
             let state = self.pane_mut(pane);
             // A search hit takes priority over the folder's saved cursor and branch.
             state.restore_cursor = None;
             state.restore_names.clear();
-            state.miller_columns.truncate(1);
             if let Some(column) = state.miller_columns.first_mut() {
                 column.restore_name = None;
                 column.selected_row = None;
@@ -956,6 +996,7 @@ impl AppModel {
             self.favorite_groups.push(FavoriteGroupSession {
                 name: name.to_owned(),
                 paths: Vec::new(),
+                labels: BTreeMap::new(),
             });
             self.persist_session();
         }
@@ -975,9 +1016,36 @@ impl AppModel {
         if let Some(group) = self.favorite_groups.get_mut(group)
             && item < group.paths.len()
         {
-            group.paths.remove(item);
+            let path = group.paths.remove(item);
+            group.labels.remove(&path);
             self.persist_session();
         }
+    }
+
+    pub(super) fn on_rename_favorite(&mut self, group: Option<usize>, path: &VPath, name: &str) {
+        let name = name.trim();
+        let path_string = path.to_string();
+        let labels = if let Some(index) = group {
+            let Some(group) = self
+                .favorite_groups
+                .get_mut(index)
+                .filter(|group| group.paths.contains(&path_string))
+            else {
+                return;
+            };
+            &mut group.labels
+        } else {
+            if !self.bookmarks.contains(path) {
+                return;
+            }
+            &mut self.bookmark_labels
+        };
+        if name.is_empty() {
+            labels.remove(&path_string);
+        } else {
+            labels.insert(path_string, name.to_owned());
+        }
+        self.persist_session();
     }
 
     pub(super) fn on_connect_remote(&mut self, uri: String, sender: &ComponentSender<Self>) {

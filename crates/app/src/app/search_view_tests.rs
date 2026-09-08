@@ -22,31 +22,30 @@ fn click_result(app: &relm4::Controller<AppModel>, path: &VPath, kind: EntryKind
     app.emit(AppMsg::OpenSearch(false));
     app.emit(AppMsg::SearchReady {
         generation: app.model().search_generation,
-        result: Ok(vec![SearchHit {
-            path: path.clone(),
-            kind,
-            size: 1,
-            content_match: false,
-        }]),
+        result: Ok(SearchResults {
+            hits: vec![SearchHit {
+                path: path.clone(),
+                kind,
+                size: 1,
+                content_match: false,
+            }],
+            ..SearchResults::default()
+        }),
     });
     wait_until(|| {
         app.model().search_open
             && app
                 .model()
                 .search_results
+                .hits
                 .first()
                 .is_some_and(|hit| hit.path == *path)
-            && app.widgets().search.results.first_child().is_some()
+            && app.widgets().search.result_store.n_items() == 1
     });
-    let row = app
-        .widgets()
+    app.widgets()
         .search
         .results
-        .first_child()
-        .unwrap()
-        .downcast::<gtk::Button>()
-        .unwrap();
-    row.emit_clicked();
+        .emit_by_name::<()>("activate", &[&0_u32]);
     wait_until(|| {
         let model = app.model();
         !model.search_open
@@ -107,6 +106,8 @@ fn gtk_search_click_reveals_and_selects_in_every_view() {
         .detach();
     app.widget().present();
     wait_until(|| !app.model().pane(PaneId::Left).loading);
+
+    exercise_large_results_and_cancellation(&app, &target);
 
     for mode in [
         PaneViewMode::List,
@@ -190,4 +191,152 @@ fn gtk_search_click_reveals_and_selects_in_every_view() {
     assert!(app.model().pane(PaneId::Left).pending_reveal.is_none());
     assert!(app.model().pane(PaneId::Left).selection.is_empty());
     app.widget().close();
+}
+
+fn count_result_rows(widget: &gtk::Widget) -> usize {
+    let mut count = usize::from(widget.has_css_class("search-result-row"));
+    let mut child = widget.first_child();
+    while let Some(current) = child {
+        count += count_result_rows(&current);
+        child = current.next_sibling();
+    }
+    count
+}
+
+fn exercise_large_results_and_cancellation(app: &relm4::Controller<AppModel>, target: &VPath) {
+    app.emit(AppMsg::OpenSearch(false));
+    let mut hits: Vec<_> = (0..9_999)
+        .map(|index| SearchHit {
+            path: target.parent().unwrap().join_name(
+                format!("document-{index:05}-{}-ü.txt", "long-name-".repeat(16)).as_ref(),
+            ),
+            kind: EntryKind::File,
+            size: index,
+            content_match: true,
+        })
+        .collect();
+    hits.push(SearchHit {
+        path: target.clone(),
+        kind: EntryKind::File,
+        size: 5,
+        content_match: false,
+    });
+    app.emit(AppMsg::SearchReady {
+        generation: app.model().search_generation,
+        result: Ok(SearchResults {
+            hits,
+            skipped_entries: 2,
+            first_error: Some("A private folder could not be read".into()),
+            limit_reached: true,
+        }),
+    });
+    wait_until(|| {
+        let widgets = app.widgets();
+        widgets.search.result_store.n_items() == 10_000
+            && count_result_rows(widgets.search.results.upcast_ref()) > 0
+            && widgets.search.results.width() > 0
+    });
+    {
+        let widgets = app.widgets();
+        assert!(
+            count_result_rows(widgets.search.results.upcast_ref()) < 1_000,
+            "results must create only visible rows, not 10,000 widgets"
+        );
+        assert!(
+            widgets.search.results.width() < 900,
+            "long filenames must not widen the dialog"
+        );
+        assert!(widgets.search.status.text().contains("10000 results"));
+        assert!(
+            widgets
+                .search
+                .status
+                .text()
+                .contains("2 items could not be searched")
+        );
+        assert!(widgets.search.status.text().contains("narrow your search"));
+        assert_eq!(
+            widgets.search.status.tooltip_text().as_deref(),
+            Some("A private folder could not be read")
+        );
+    }
+    snapshot_search(app, "search-large-results");
+    // Hits beyond the old 2,000-row cutoff remain actionable.
+    app.widgets()
+        .search
+        .results
+        .emit_by_name::<()>("activate", &[&9_999_u32]);
+    wait_until(|| {
+        !app.model().search_open && app.model().focused_path(PaneId::Left).as_ref() == Some(target)
+    });
+
+    app.emit(AppMsg::OpenSearch(false));
+    let generation = app.model().search_generation.wrapping_add(1);
+    app.emit(AppMsg::RunSearch(SearchOptions {
+        query: "file".into(),
+        ..SearchOptions::default()
+    }));
+    app.emit(AppMsg::CancelSearch);
+    app.emit(AppMsg::SearchReady {
+        generation,
+        result: Err("stale completion".into()),
+    });
+    wait_until(|| app.model().search_generation > generation && !app.model().search_loading);
+    assert!(app.model().search_open);
+    assert_ne!(
+        app.model().search_error.as_deref(),
+        Some("stale completion")
+    );
+    assert!(!app.widgets().search.stop.is_visible());
+
+    let generation = app.model().search_generation;
+    app.emit(AppMsg::CloseSearch);
+    app.emit(AppMsg::OpenSearch(false));
+    app.emit(AppMsg::SearchReady {
+        generation,
+        result: Err("closed completion".into()),
+    });
+    wait_until(|| {
+        app.model().search_generation > generation
+            && app.model().search_open
+            && !app.widgets().search.closing_from_model.get()
+            && app.widgets().search.dialog.is_visible()
+    });
+    assert_ne!(
+        app.model().search_error.as_deref(),
+        Some("closed completion")
+    );
+    app.emit(AppMsg::RunSearch(SearchOptions::default()));
+    wait_until(|| {
+        !app.model().search_loading
+            && app.model().search_error.as_deref() == Some("Enter a name, path, or content query")
+    });
+    assert_eq!(app.widgets().search.result_store.n_items(), 0);
+    app.widgets().search.dialog.close();
+    wait_until(|| !app.model().search_open);
+}
+
+fn snapshot_search(app: &relm4::Controller<AppModel>, name: &str) {
+    let Some(directory) = std::env::var_os("COMMANDER_SEARCH_SNAPSHOT_DIR") else {
+        return;
+    };
+    // Allow the dialog's opening animation to settle before capturing it.
+    let deadline = Instant::now() + Duration::from_millis(300);
+    let context = glib::MainContext::default();
+    while Instant::now() < deadline {
+        while context.pending() {
+            context.iteration(false);
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    let child = gtk::prelude::GtkWindowExt::child(app.widget()).unwrap();
+    let snapshot = gtk::Snapshot::new();
+    app.widget().snapshot_child(&child, &snapshot);
+    let node = snapshot.to_node().unwrap();
+    app.widget()
+        .renderer()
+        .unwrap()
+        .render_texture(&node, None)
+        .save_to_png(std::path::Path::new(&directory).join(format!("{name}.png")))
+        .unwrap();
 }

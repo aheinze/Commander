@@ -3,6 +3,7 @@ use std::{env, path::PathBuf, process::Command};
 fn main() {
     println!("cargo:rerun-if-changed=assets/icons.gresource.xml");
     println!("cargo:rerun-if-changed=assets/icons");
+    println!("cargo:rerun-if-changed=assets/branding/commander.svg");
     let output =
         PathBuf::from(env::var_os("OUT_DIR").expect("Cargo sets OUT_DIR")).join("icons.gresource");
     let status = Command::new("glib-compile-resources")

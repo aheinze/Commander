@@ -64,6 +64,11 @@ impl QuickLookWidgets {
         video.set_loop(false);
         stack.add_named(&video, Some("media"));
         let text_view = text::new_view("quick-look-text");
+        // Inset the text, not the viewport, so its surface fills the preview.
+        text_view.set_left_margin(16);
+        text_view.set_right_margin(16);
+        text_view.set_top_margin(12);
+        text_view.set_bottom_margin(12);
         let text_scroll = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Automatic)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
@@ -504,6 +509,11 @@ impl PreviewWidgets {
 
         let general_section = inspector_section("General");
         let (path_row, path_value) = inspector_row("Path");
+        path_row.add_css_class("inspector-path-row");
+        path_row.set_orientation(gtk::Orientation::Vertical);
+        path_row.set_spacing(4);
+        path_value.set_xalign(0.0);
+        path_value.set_selectable(true);
         let (size_row, size_value) = inspector_row("Size");
         let (modified_row, modified_value) = inspector_row("Modified");
         let (created_row, created_value) = inspector_row("Created");
@@ -532,6 +542,15 @@ impl PreviewWidgets {
         let (permission_mode_row, permission_mode_value) = inspector_row("Mode");
         let (permission_octal_row, permission_octal_value) = inspector_row("Octal");
         let (permission_identity_row, permission_identity_value) = inspector_row("Owner / group");
+        for value in [
+            &permission_owner_value,
+            &permission_group_value,
+            &permission_others_value,
+            &permission_mode_value,
+            &permission_octal_value,
+        ] {
+            value.add_css_class("inspector-code-value");
+        }
         for row in [
             &permission_owner_row,
             &permission_group_row,
@@ -553,7 +572,6 @@ impl PreviewWidgets {
 
         let git_section = gtk::Box::new(gtk::Orientation::Vertical, 0);
         git_section.add_css_class("inspector-section");
-        git_section.add_css_class("inspector-section-git");
         let git_header = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         git_header.add_css_class("inspector-section-header");
         let git_title = gtk::Label::new(Some("Git"));
@@ -916,9 +934,10 @@ impl PreviewWidgets {
             .file_name()
             .is_some_and(|name| name.as_encoded_bytes().starts_with(b"."));
         let read_only = preview.metadata.mode.is_some_and(|mode| mode & 0o222 == 0);
-        self.hidden_value.set_label(if hidden { "●" } else { "○" });
+        self.hidden_value
+            .set_label(if hidden { "Yes" } else { "No" });
         self.read_only_value
-            .set_label(if read_only { "●" } else { "○" });
+            .set_label(if read_only { "Yes" } else { "No" });
         if let Some(mode) = preview.metadata.mode {
             self.permissions_section.set_visible(true);
             self.permission_owner_value

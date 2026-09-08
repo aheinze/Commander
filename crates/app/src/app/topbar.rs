@@ -10,8 +10,9 @@ struct CommandControl {
 
 pub(super) struct TopBarWidgets {
     pub(super) root: gtk::Box,
+    primary: gtk::Box,
     filter_row: gtk::Box,
-    search_slot: gtk::Box,
+    search_container: adw::Clamp,
     pub(super) search: gtk::SearchEntry,
     filter_pane: Rc<Cell<PaneId>>,
     syncing_filter: Rc<Cell<bool>>,
@@ -153,12 +154,21 @@ impl TopBarWidgets {
     pub(super) fn new(window: &adw::ApplicationWindow, sender: &ComponentSender<AppModel>) -> Self {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
         root.add_css_class("carelo-toolbar");
-        let primary = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        let primary = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         primary.add_css_class("toolbar-primary");
-        root.append(&primary);
+        let leading = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        let trailing = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+        trailing.set_hexpand(true);
+        trailing.set_halign(gtk::Align::End);
+        primary.append(&leading);
+        primary.append(&trailing);
+        // Custom chrome needs a native handle for dragging and titlebar gestures.
+        let window_handle = gtk::WindowHandle::new();
+        window_handle.set_child(Some(&primary));
+        root.append(&window_handle);
         let window_controls = window_controls(window);
         window_controls.add_css_class("toolbar-window-controls");
-        primary.append(&window_controls);
+        leading.append(&window_controls);
         let navigation = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         navigation.add_css_class("topbar-navigation");
         let mut commands = Vec::new();
@@ -194,28 +204,34 @@ impl TopBarWidgets {
             });
             navigation_buttons.push(button);
         }
-        primary.append(&navigation);
+        leading.append(&navigation);
         let location = gtk::Button::new();
         location.add_css_class("flat");
         location.add_css_class("toolbar-location");
+        // Leave spare title space draggable without increasing the toolbar minimum.
         location.set_hexpand(true);
+        location.set_halign(gtk::Align::Start);
         let title = gtk::Label::new(None);
         title.add_css_class("toolbar-title");
         title.set_xalign(0.0);
         title.set_width_chars(1);
+        title.set_max_width_chars(32);
         title.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
         location.set_child(Some(&title));
         connect_button(&location, sender, || {
             AppMsg::ExecuteCommand(CommandId::FocusLocation)
         });
-        primary.append(&location);
-        let search_slot = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        primary.append(&search_slot);
+        leading.append(&location);
         let search = gtk::SearchEntry::new();
         search.add_css_class("toolbar-search");
         search.set_width_chars(12);
         search.set_max_width_chars(24);
         search.set_hexpand(true);
+        let search_container = adw::Clamp::new();
+        search_container.set_child(Some(&search));
+        search_container.set_maximum_size(560);
+        search_container.set_tightening_threshold(360);
+        search_container.set_hexpand(true);
         let filter_pane = Rc::new(Cell::new(PaneId::Left));
         let syncing_filter = Rc::new(Cell::new(false));
         let input = sender.input_sender().clone();
@@ -236,7 +252,7 @@ impl TopBarWidgets {
         });
         let filter_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         filter_row.add_css_class("toolbar-filter-row");
-        filter_row.append(&search);
+        filter_row.append(&search_container);
         root.append(&filter_row);
 
         let (new_menu, new_label, _, new_popover, new_items) =
@@ -274,7 +290,7 @@ impl TopBarWidgets {
                 command,
             );
         }
-        primary.append(&new_menu);
+        trailing.append(&new_menu);
 
         let (view_menu, view_label, view_icon, view_popover, view_items) =
             menu("View", "commander-list-symbolic");
@@ -320,7 +336,7 @@ impl TopBarWidgets {
             shortcut: None,
         });
         view_items.append(&hidden);
-        primary.append(&view_menu);
+        trailing.append(&view_menu);
 
         let (layout_menu, layout_label, _, _, layout_items) =
             menu("Layout", "commander-columns-2-symbolic");
@@ -367,7 +383,7 @@ impl TopBarWidgets {
             });
             layout_items.append(button);
         }
-        primary.append(&layout_menu);
+        trailing.append(&layout_menu);
 
         let (more_menu, more_label, _, more_popover, more_items) =
             menu("More actions", "commander-ellipsis-symbolic");
@@ -449,15 +465,16 @@ impl TopBarWidgets {
             "commander-settings-2-symbolic",
             CommandId::Settings,
         );
-        primary.append(&more_menu);
+        trailing.append(&more_menu);
         let spinner = gtk::Spinner::new();
         spinner.set_tooltip_text(Some("Loading folder contents"));
         spinner.set_visible(false);
-        primary.append(&spinner);
+        trailing.append(&spinner);
         let result = Self {
             root,
+            primary,
             filter_row,
-            search_slot,
+            search_container,
             search,
             filter_pane,
             syncing_filter,
@@ -514,29 +531,41 @@ impl TopBarWidgets {
             label.set_visible(layout < 2);
         }
         let inline = layout == 0;
-        let target = if inline {
-            &self.search_slot
-        } else {
-            &self.filter_row
-        };
-        target.set_visible(true);
-        if self.search.parent().as_ref() != Some(target.upcast_ref()) {
+        // Three equal regions guarantee centering and prevent either side from
+        // taking the filter's space. The title ellipsizes within its region.
+        self.primary.set_homogeneous(inline);
+        let currently_inline =
+            self.search_container.parent().as_ref() == Some(self.primary.upcast_ref());
+        if currently_inline != inline {
             let focus = self
                 .root
                 .root()
                 .and_downcast::<gtk::Window>()
                 .and_then(|window| gtk::prelude::GtkWindowExt::focus(&window));
             let focused = focus.is_some_and(|focus| focus.is_ancestor(&self.search));
-            if let Some(parent) = self.search.parent().and_downcast::<gtk::Box>() {
-                parent.remove(&self.search);
+            let selection = self.search.selection_bounds();
+            let cursor = self.search.position();
+            if inline {
+                self.filter_row.remove(&self.search_container);
+                self.primary.insert_child_after(
+                    &self.search_container,
+                    self.primary.first_child().as_ref(),
+                );
+            } else {
+                self.primary.remove(&self.search_container);
+                self.filter_row.set_visible(true);
+                self.filter_row.append(&self.search_container);
             }
-            target.append(&self.search);
             if focused {
                 self.search.grab_focus();
+                if let Some((start, end)) = selection {
+                    self.search.select_region(start, end);
+                } else {
+                    self.search.set_position(cursor);
+                }
             }
         }
         self.filter_row.set_visible(!inline);
-        self.search_slot.set_visible(inline);
     }
 
     pub(super) fn render(&mut self, model: &AppModel) {
@@ -548,8 +577,8 @@ impl TopBarWidgets {
             .root()
             .map_or(0, |window| window.width())
             .saturating_sub(i32::from(model.sidebar_visible) * SIDEBAR_WIDTH);
-        self.apply_layout(available);
         self.window_controls.set_visible(!model.sidebar_visible);
+        self.apply_layout(available);
         let state = model.pane(model.active_pane);
         let path = state.current_directory();
         self.filter_pane.set(model.active_pane);

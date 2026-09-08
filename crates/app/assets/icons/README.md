@@ -12,6 +12,9 @@ are rounded to four decimal places; no raster images are used.
 The adjacent LICENSE contains Lucide's ISC license and the MIT notice for icons
 derived from Feather. It is also embedded in the executable's resource bundle.
 
+`eject.svg`, `scissors.svg`, and `clipboard.svg` are original Commander artwork
+matching the same size and line weight.
+
 To add an icon, download its original SVG from the pinned source, run
 `python normalize.py original.svg new-icon.svg`, and add a namespaced
 `commander-…-symbolic` alias under `scalable/actions/` in `../icons.gresource.xml`.

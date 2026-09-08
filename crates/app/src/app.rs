@@ -10,10 +10,16 @@
 //! `pub(super)`.
 
 mod alert;
+#[cfg(test)]
+mod breadcrumb_tests;
 mod clipboard;
+mod compare_view;
 mod component;
 mod context_menu;
+mod devices;
 mod dialogs;
+#[cfg(test)]
+mod favorites_tests;
 mod fileops;
 mod job_view;
 #[cfg(test)]
@@ -49,7 +55,6 @@ mod widgets;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
-use std::io::{Read, Write};
 use std::process::Command;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -92,8 +97,8 @@ use crate::commands::{
     COMMANDS, CommandDefinition, CommandId, Keymap, KeymapOverrides, KeymapProfile,
 };
 use crate::features::{
-    CompareEntry, CompareStatus, ImageOutputFormat, SearchHit, SearchOptions, compare_directories,
-    convert_image, recursive_search, sha256, supports_image_conversion,
+    ImageOutputFormat, MAX_CONTENT_BYTES, SearchHit, SearchOptions, SearchResults, convert_image,
+    recursive_search, sha256, supports_image_conversion,
 };
 use crate::list_model::{ListingListModel, RowReference};
 use crate::omarchy::{self, OmarchyPalette};
@@ -112,7 +117,7 @@ use self::context_menu::{
 };
 use self::dialogs::{
     connect_remote_uri, reveal_in_file_manager, show_batch_rename_dialog, show_checksum_comparison,
-    show_checksum_result, show_compare_results, show_conflict_dialog, show_create_archive_dialog,
+    show_checksum_result, show_conflict_dialog, show_create_archive_dialog,
     show_delete_workspace_dialog, show_elevated_permissions_dialog, show_image_conversion_dialog,
     show_new_directory_dialog, show_new_favorite_group_dialog, show_new_file_dialog,
     show_open_with_dialog, show_pdf_tools_dialog, show_permanent_delete_dialog,
@@ -120,7 +125,7 @@ use self::dialogs::{
     show_save_workspace_dialog, show_settings_dialog, show_shortcut_reference,
     show_update_workspace_dialog,
 };
-use self::fileops::{apply_history, batch_rename, common_parent, set_mode_tree, sync_from_compare};
+use self::fileops::{apply_history, batch_rename, common_parent, set_mode_tree};
 use self::palette::{matching_commands, palette_query_matches};
 use self::pane_view::{PaneWidgets, ScrollMetrics, install_file_drop_target};
 use self::preview::{
@@ -330,12 +335,6 @@ pub(crate) enum ConflictChoice {
     Skip,
     KeepBoth,
     ReplaceIfNewer,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum SyncDirection {
-    LeftToRight,
-    RightToLeft,
 }
 
 #[derive(Debug)]
@@ -1187,6 +1186,7 @@ struct TerminalTabState {
 
 pub struct AppModel {
     live_updates: model_watch::LiveUpdates,
+    devices: devices::DeviceState,
     panes: [PaneState; 2],
     active_pane: PaneId,
     vertical_split: bool,
@@ -1203,6 +1203,7 @@ pub struct AppModel {
     folder_measure: FolderMeasureState,
     inspector_git: InspectorGitState,
     bookmarks: Vec<VPath>,
+    bookmark_labels: BTreeMap<String, String>,
     favorite_groups: Vec<FavoriteGroupSession>,
     recent: Vec<VPath>,
     window_width: i32,
@@ -1243,7 +1244,7 @@ pub struct AppModel {
     search_generation: u64,
     search_cancel: Option<CancelToken>,
     search_loading: bool,
-    search_results: Vec<SearchHit>,
+    search_results: SearchResults,
     search_error: Option<String>,
     tool_cancel: Option<CancelToken>,
     archive_mounts: Vec<(VPath, tempfile::TempDir)>,
@@ -1319,6 +1320,11 @@ pub struct FinishedOperation {
 
 #[derive(Debug)]
 pub enum AppMsg {
+    DevicesChanged,
+    DeviceMountRemoved(VPath),
+    OpenDevice(String),
+    RemoveDevice(String),
+    DeviceFinished(Result<devices::DeviceOutcome, String>),
     ShowRecovery,
     RecoveryReady {
         records: Vec<dualpane_engine::journal::RecoveryRecord>,
@@ -1359,24 +1365,13 @@ pub enum AppMsg {
     ToggleQuickLook,
     OpenSearch(bool),
     CloseSearch,
+    CancelSearch,
     RunSearch(SearchOptions),
     SearchReady {
         generation: u64,
-        result: Result<Vec<SearchHit>, String>,
+        result: Result<SearchResults, String>,
     },
     OpenSearchResult(VPath),
-    CompareReady {
-        left: VPath,
-        right: VPath,
-        result: Result<Vec<CompareEntry>, String>,
-    },
-    SyncCompared {
-        left: VPath,
-        right: VPath,
-        entries: Vec<CompareEntry>,
-        direction: SyncDirection,
-        mirror: bool,
-    },
     SyncReady(Result<usize, String>),
     ChecksumReady {
         path: VPath,
@@ -1511,6 +1506,7 @@ pub enum AppMsg {
     ClearLayered,
     SelectionChanged(PaneId, Selection, Option<u32>),
     ContextTarget(PaneId, Option<(VPath, EntryKind)>),
+    PasteInto(PaneId, VPath),
     MoveCursor(i32, bool),
     MoveCursorVertical(i32, bool),
     MoveCursorHorizontal(i32, bool),
@@ -1521,6 +1517,8 @@ pub enum AppMsg {
     InvertSelectionActive,
     OpenCursor,
     Navigate(PaneId, VPath),
+    NavigateExact(PaneId, VPath),
+    CancelLocation(PaneId),
     Back(PaneId),
     Forward(PaneId),
     Up(PaneId),
@@ -1576,6 +1574,11 @@ pub enum AppMsg {
     },
     MoveBookmarkToEnd(usize),
     RemoveBookmark(usize),
+    RenameFavorite {
+        group: Option<usize>,
+        path: VPath,
+        name: String,
+    },
     CreateFavoriteGroup(String),
     RemoveFavoriteGroup(usize),
     AddCurrentToFavoriteGroup(usize),
@@ -1608,6 +1611,7 @@ pub enum AppMsg {
         color_theme: ColorTheme,
         parallel_transfers: bool,
     },
+    ManageCustomTools,
     SetCustomTools(Vec<CustomToolSession>),
     RunCustomTool(usize),
     CustomToolFinished(Result<String, String>),
@@ -1702,6 +1706,7 @@ pub struct AppWidgets {
     sidebar_recent: gtk::Box,
     sidebar_workspaces: gtk::Box,
     sidebar_remotes: gtk::Box,
+    sidebar_devices: devices::DeviceSidebar,
     sidebar_places: Vec<(VPath, gtk::Button)>,
     sidebar_bookmark_rows: Vec<(VPath, gtk::Button)>,
     sidebar_recent_rows: Vec<(VPath, gtk::Button)>,
@@ -1711,7 +1716,7 @@ pub struct AppWidgets {
     rendered_focus_inspector_epoch: u64,
     rendered_preview_visible: bool,
     rendered_preview_width: i32,
-    rendered_bookmarks: Vec<String>,
+    rendered_bookmarks: Option<widgets::SidebarFavorites>,
     rendered_recent: Vec<String>,
     rendered_workspaces: Vec<String>,
     rendered_remotes: Vec<String>,
@@ -1813,7 +1818,10 @@ impl AppModel {
             })
             .collect::<Vec<_>>();
         items.extend(self.bookmarks.iter().filter_map(|path| {
-            let label = format!("Open favorite · {path}");
+            let label = self.bookmark_labels.get(&path.to_string()).map_or_else(
+                || format!("Open favorite · {path}"),
+                |name| format!("Open favorite · {name} · {path}"),
+            );
             palette_query_matches(query, &[&label, "favorite bookmark open"]).then(|| PaletteItem {
                 action: PaletteAction::Navigate(path.clone()),
                 label,
@@ -1822,7 +1830,10 @@ impl AppModel {
         }));
         for group in &self.favorite_groups {
             items.extend(group.paths.iter().filter_map(|path| {
-                let label = format!("Open {} favorite · {path}", group.name);
+                let label = group.labels.get(path).map_or_else(
+                    || format!("Open {} favorite · {path}", group.name),
+                    |name| format!("Open {} favorite · {name} · {path}", group.name),
+                );
                 palette_query_matches(query, &[&label, "favorite group bookmark open"]).then(|| {
                     PaletteItem {
                         action: PaletteAction::Navigate(VPath::from(path.as_str())),

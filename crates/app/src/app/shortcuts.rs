@@ -89,6 +89,44 @@ pub(super) fn install_shortcuts(
         let control = modifiers.contains(gdk::ModifierType::CONTROL_MASK);
         let alt = modifiers.contains(gdk::ModifierType::ALT_MASK);
         let focused = gtk::prelude::GtkWindowExt::focus(&key_window);
+        if focused.as_ref().is_some_and(|focus| {
+            widget_has_ancestor_css_class(
+                focus,
+                &["file-context-menu", "breadcrumb-ancestors", "tools-dialog"],
+            )
+        }) {
+            // These surfaces own navigation, typing, and activation while focused.
+            return glib::Propagation::Proceed;
+        }
+        if key == gdk::Key::Escape
+            && focused
+                .as_ref()
+                .is_some_and(|focus| widget_has_ancestor_css_class(focus, &["path-entry"]))
+        {
+            return glib::Propagation::Proceed;
+        }
+        if !control
+            && !alt
+            && (matches!(
+                key,
+                gdk::Key::Return
+                    | gdk::Key::KP_Enter
+                    | gdk::Key::space
+                    | gdk::Key::Left
+                    | gdk::Key::Right
+                    | gdk::Key::Up
+                    | gdk::Key::Down
+                    | gdk::Key::Home
+                    | gdk::Key::End
+            ) || key
+                .to_unicode()
+                .is_some_and(|character| !character.is_control()))
+            && focused.as_ref().is_some_and(|focus| {
+                widget_has_ancestor_css_class(focus, &["breadcrumbs", "breadcrumb-icon"])
+            })
+        {
+            return glib::Propagation::Proceed;
+        }
         let terminal_focused = focused
             .as_ref()
             .is_some_and(|focus| widget_has_ancestor_css_class(focus, &["terminal-surface"]));

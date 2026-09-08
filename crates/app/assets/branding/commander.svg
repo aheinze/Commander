@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <title>Commander</title>
+  <desc>A slate-blue folder with two light panels, representing dual-pane file browsing.</desc>
+  <defs>
+    <linearGradient id="folder" x1="64" y1="40" x2="64" y2="110" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8299ba"/>
+      <stop offset="1" stop-color="#6e85a8"/>
+    </linearGradient>
+  </defs>
+  <path fill="#52647f" d="M12 34c0-8 6-14 14-14h24c4 0 7 2 10 6l6 8h36c8 0 14 6 14 14v48c0 9-7 16-16 16H28c-9 0-16-7-16-16Z"/>
+  <path fill="#b9c8dc" d="M25 38h78c5 0 9 4 9 9v37H16V47c0-5 4-9 9-9Z"/>
+  <path fill="#566d8f" d="M12 54c0-7 5-12 12-12h80c7 0 12 5 12 12v44c0 9-7 16-16 16H28c-9 0-16-7-16-16Z"/>
+  <path fill="url(#folder)" d="M12 52c0-7 5-12 12-12h80c7 0 12 5 12 12v44c0 9-7 16-16 16H28c-9 0-16-7-16-16Z"/>
+  <rect x="30" y="57" width="30" height="36" rx="5" fill="#edf2f8"/>
+  <rect x="68" y="57" width="30" height="36" rx="5" fill="#d1dceb"/>
+  <path d="M39 68h12m-12 9h8m30-9h12m-12 9h8" fill="none" stroke="#6b82a3" stroke-width="3" stroke-linecap="round"/>
+</svg>

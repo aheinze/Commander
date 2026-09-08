@@ -2,6 +2,13 @@
 
 use super::*;
 
+#[derive(Eq, PartialEq)]
+pub(super) struct SidebarFavorites {
+    paths: Vec<VPath>,
+    labels: BTreeMap<String, String>,
+    groups: Vec<FavoriteGroupSession>,
+}
+
 impl AppWidgets {
     /// Marks whichever sidebar rows point at the directory the active pane is showing.
     ///
@@ -16,6 +23,7 @@ impl AppWidgets {
         let mut rows = self
             .sidebar_places
             .iter()
+            .chain(&self.sidebar_devices.rows)
             .chain(&self.sidebar_bookmark_rows)
             .chain(&self.sidebar_recent_rows);
         let mut marked = false;
@@ -245,25 +253,23 @@ impl AppWidgets {
     pub(super) fn render_sidebar_bookmarks(
         &mut self,
         bookmarks: &[VPath],
+        labels: &BTreeMap<String, String>,
         groups: &[FavoriteGroupSession],
         sender: &ComponentSender<AppModel>,
     ) {
-        let mut rendered = bookmarks
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>();
-        rendered.extend(
-            groups
-                .iter()
-                .map(|group| format!("group:{}:{}", group.name, group.paths.join("\u{1f}"))),
-        );
-        if self.rendered_bookmarks == rendered {
+        let rendered = SidebarFavorites {
+            paths: bookmarks.to_vec(),
+            labels: labels.clone(),
+            groups: groups.to_vec(),
+        };
+        if self.rendered_bookmarks.as_ref() == Some(&rendered) {
             return;
         }
-        self.rendered_bookmarks.clone_from(&rendered);
+        self.rendered_bookmarks = Some(rendered);
         self.sidebar_bookmark_rows.clear();
         self.rendered_active_location = None;
         while let Some(child) = self.sidebar_bookmarks.first_child() {
+            remove_sidebar_popovers(&child);
             self.sidebar_bookmarks.remove(&child);
         }
         if bookmarks.is_empty() && groups.is_empty() {
@@ -274,12 +280,8 @@ impl AppWidgets {
             self.sidebar_bookmarks.append(&empty);
         }
         for (index, path) in bookmarks.iter().enumerate() {
-            let label = path
-                .file_name()
-                .and_then(OsStr::to_str)
-                .filter(|name| !name.is_empty())
-                .unwrap_or("/");
-            let button = sidebar_button(label, "commander-folder-symbolic");
+            let label = favorite_label(path, labels);
+            let button = sidebar_button(&label, "commander-folder-symbolic");
             button.set_halign(gtk::Align::Fill);
             button.set_tooltip_text(Some(&path.to_string()));
             self.sidebar_bookmark_rows
@@ -322,6 +324,7 @@ impl AppWidgets {
             }
             button.add_controller(drop);
             let (menu, actions) = sidebar_context_menu(&button);
+            append_favorite_rename_action(&menu, &actions, None, path, &label, sender);
             for (label, icon, message) in [
                 (
                     "Move Up",
@@ -418,14 +421,12 @@ impl AppWidgets {
             for (item_index, path) in group.paths.iter().enumerate() {
                 let path = VPath::from(path.as_str());
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-                let label = path
-                    .file_name()
-                    .and_then(OsStr::to_str)
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or("/");
-                let button = sidebar_button(label, "commander-folder-symbolic");
+                let label = favorite_label(&path, &group.labels);
+                let button = sidebar_button(&label, "commander-folder-symbolic");
                 button.set_hexpand(true);
                 button.set_tooltip_text(Some(&path.to_string()));
+                self.sidebar_bookmark_rows
+                    .push((path.clone(), button.clone()));
                 let destination = path.clone();
                 let drop_destination = path.clone();
                 let input = sender.input_sender().clone();
@@ -438,6 +439,22 @@ impl AppWidgets {
                     Rc::clone(&self.file_drag_ui),
                     move |_| Some(drop_destination.clone()),
                 );
+                let (menu, actions) = sidebar_context_menu(&button);
+                append_favorite_rename_action(
+                    &menu,
+                    &actions,
+                    Some(group_index),
+                    &path,
+                    &label,
+                    sender,
+                );
+                let click = gtk::GestureClick::new();
+                click.set_button(3);
+                click.connect_pressed(move |_, _, x, y| {
+                    menu.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                    menu.popup();
+                });
+                button.add_controller(click);
                 let remove = icon_button("commander-x-symbolic", "Remove from group");
                 remove.add_css_class("flat");
                 remove.add_css_class("sidebar-remove");
@@ -550,6 +567,53 @@ impl AppWidgets {
             }
         });
     }
+}
+
+fn favorite_label(path: &VPath, labels: &BTreeMap<String, String>) -> String {
+    labels
+        .get(&path.to_string())
+        .filter(|name| !name.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| {
+            path.file_name()
+                .map_or_else(|| path.to_string(), display_name)
+        })
+}
+
+fn remove_sidebar_popovers(widget: &gtk::Widget) {
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if let Some(menu) = widget.downcast_ref::<gtk::Popover>() {
+            // Popovers are manually parented, so a rebuilt Favorite row must
+            // release their actions and unparent them before the row is dropped.
+            menu.popdown();
+            menu.set_child(None::<&gtk::Widget>);
+            menu.unparent();
+        } else {
+            remove_sidebar_popovers(&widget);
+        }
+    }
+}
+
+fn append_favorite_rename_action(
+    menu: &gtk::Popover,
+    actions: &gtk::Box,
+    group: Option<usize>,
+    path: &VPath,
+    label: &str,
+    sender: &ComponentSender<AppModel>,
+) {
+    let rename = context_menu_item_button("Rename…", "commander-file-pen-line-symbolic", None);
+    let menu = menu.clone();
+    let input = sender.input_sender().clone();
+    let path = path.clone();
+    let label = label.to_owned();
+    rename.connect_clicked(move |_| {
+        menu.popdown();
+        super::dialogs::show_rename_favorite_dialog(group, &path, &label, input.clone());
+    });
+    actions.append(&rename);
 }
 
 /// Creates sidebar popovers with the same surface and action insets as file menus.

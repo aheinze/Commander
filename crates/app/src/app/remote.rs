@@ -907,6 +907,105 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires the disposable FTP fixture from scripts/test-ftp.py"]
+    fn ftp_disconnect_preserves_destination_and_reports_failure() {
+        let port = std::env::var("COMMANDER_FTP_TEST_PORT").expect("local FTP fixture port");
+        let drop_file =
+            std::env::var_os("COMMANDER_FTP_DROP_FILE").expect("fixture disconnect trigger");
+        let context = glib::MainContext::new();
+        context
+            .with_thread_default(|| {
+                context.block_on(async {
+                    let invalid = RemoteConnection::parse(&format!(
+                        "ftp://commander-test:wrong-password@127.0.0.1:{port}/nested"
+                    ))
+                    .unwrap();
+                    assert!(
+                        mount_connection(invalid).await.is_err(),
+                        "rejected credentials must not mount successfully"
+                    );
+                    let connection = RemoteConnection::parse(&format!(
+                        "ftp://commander-test:test-password@127.0.0.1:{port}/nested"
+                    ))
+                    .unwrap();
+                    let file = gio::File::for_uri(&connection.uri);
+                    let mounted = mount_connection(connection).await.unwrap();
+                    let fixture = tempfile::tempdir().unwrap();
+                    let destination = fixture.path().join("large.bin");
+                    std::fs::write(&destination, "original destination").unwrap();
+                    let engine = OperationEngine::default()
+                        .with_journal_directory(fixture.path().join("jobs"));
+                    let copied = engine
+                        .spawn_copy(
+                            vec![mounted.join_name(OsStr::new("proof.txt"))],
+                            VPath::from(fixture.path()),
+                            ScanOptions::default(),
+                            TransferOptions {
+                                conflict_policy: ConflictPolicy::Overwrite,
+                                verify: true,
+                                durable: true,
+                                parallel: false,
+                            },
+                        )
+                        .join();
+                    assert_eq!(copied.state, JobState::Done, "{copied:?}");
+                    assert_eq!(
+                        std::fs::read(fixture.path().join("proof.txt")).unwrap(),
+                        b"FTP connection verified\n"
+                    );
+                    let job = engine.spawn_copy(
+                        vec![mounted.join_name(OsStr::new("large.bin"))],
+                        VPath::from(fixture.path()),
+                        ScanOptions::default(),
+                        TransferOptions {
+                            conflict_policy: ConflictPolicy::Overwrite,
+                            verify: true,
+                            durable: true,
+                            parallel: false,
+                        },
+                    );
+                    let deadline = Instant::now() + Duration::from_secs(60);
+                    let mut disconnected = false;
+                    loop {
+                        assert!(
+                            Instant::now() < deadline,
+                            "FTP transfer did not finish after disconnect"
+                        );
+                        match job.events().recv_timeout(Duration::from_millis(100)) {
+                            Ok(JobEvent::Progress { progress, .. })
+                                if progress.bytes_done > 0 && !disconnected =>
+                            {
+                                std::fs::write(&drop_file, "disconnect this fixture").unwrap();
+                                disconnected = true;
+                            }
+                            Ok(JobEvent::Finished { .. }) => break,
+                            Ok(_) => {}
+                            Err(error) if error.is_timeout() => {}
+                            Err(_) => break,
+                        }
+                    }
+                    let summary = job.join();
+                    assert!(
+                        disconnected,
+                        "copy must transfer data before the connection is dropped: {summary:?}"
+                    );
+                    assert_eq!(summary.state, JobState::Failed);
+                    assert!(!summary.outcome.errors.is_empty());
+                    assert_eq!(std::fs::read(destination).unwrap(), b"original destination");
+                    if let Ok(mount) = file.find_enclosing_mount(gio::Cancellable::NONE) {
+                        let _ = mount
+                            .unmount_with_operation_future(
+                                gio::MountUnmountFlags::FORCE,
+                                gio::MountOperation::NONE,
+                            )
+                            .await;
+                    }
+                })
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn parses_resolved_avahi_records_into_uris() {
         let output = "\
 +;wlp3s0;IPv4;AG-LOCAL-CLOUD;_smb._tcp;local

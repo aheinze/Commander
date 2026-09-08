@@ -104,8 +104,9 @@ git push origin v0.3.0
 
 Replace `0.3.0` with the version being released. The tag must match the workspace
 version exactly. A suffix such as `v0.3.0-rc.1` produces a GitHub prerelease.
-Formatting, Clippy, workspace tests, packaging tests, and an AppImage launch under
-Xvfb must pass on both architectures before publication. Packaging tools have
+Formatting, Clippy, workspace tests, packaging tests, clean Ubuntu/Fedora native
+package install/upgrade/removal checks, and an AppImage launch under Xvfb must pass
+on both architectures before publication. Packaging tools have
 pinned versions and SHA-256 checksums; actions are pinned to commit hashes.
 
 The publishing job uploads all files to a draft and then publishes automatically.
@@ -116,6 +117,7 @@ workflow** with an existing version tag once it is on the default branch.
 Tag pushes made by another workflow's `GITHUB_TOKEN` do not trigger this workflow;
 push the tag with your normal Git credentials or use the manual action.
 
-Install testing on other Linux distributions is still separate from these build
-and smoke checks. Update the two tool hashes for both architectures together when
-changing a packaging tool version in the workflow.
+The [release checks](../docs/RELEASE_CHECKS.md#clean-native-package-lifecycle)
+document how to run the container package checks locally. Full desktop-session
+testing and other Linux distributions remain separate. Update the two tool hashes
+for both architectures together when changing a packaging tool version in the workflow.

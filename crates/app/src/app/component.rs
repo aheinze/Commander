@@ -13,6 +13,7 @@ impl SimpleComponent for AppModel {
         adw::ApplicationWindow::builder()
             .application(&relm4::main_adw_application())
             .title(crate::APP_NAME)
+            .icon_name("org.example.Dualpane")
             .default_width(1_520)
             .default_height(900)
             .build()
@@ -68,6 +69,7 @@ impl SimpleComponent for AppModel {
                 }
             };
         let mut model = AppModel {
+            devices: devices::DeviceState::new(),
             panes: [
                 PaneState::from_session(&left_session, left_fallback),
                 PaneState::from_session(&right_session, right_fallback),
@@ -93,6 +95,7 @@ impl SimpleComponent for AppModel {
                 .iter()
                 .map(|path| VPath::from(path.as_str()))
                 .collect(),
+            bookmark_labels: saved.bookmark_labels.clone(),
             favorite_groups: saved.favorite_groups.clone(),
             recent: saved
                 .recent
@@ -145,7 +148,7 @@ impl SimpleComponent for AppModel {
             search_generation: 0,
             search_cancel: None,
             search_loading: false,
-            search_results: Vec::new(),
+            search_results: SearchResults::default(),
             search_error: None,
             tool_cancel: None,
             archive_mounts: Vec::new(),
@@ -364,6 +367,7 @@ impl SimpleComponent for AppModel {
             recent: sidebar_recent,
             workspaces: sidebar_workspaces,
             remotes: sidebar_remotes,
+            devices: sidebar_devices,
             places: sidebar_places,
         } = build_sidebar(&window, &sender, Rc::clone(&file_drag_ui));
         let preview = PreviewWidgets::new(&sender);
@@ -557,6 +561,7 @@ impl SimpleComponent for AppModel {
             sidebar_recent,
             sidebar_workspaces,
             sidebar_remotes,
+            sidebar_devices,
             sidebar_places,
             sidebar_bookmark_rows: Vec::new(),
             sidebar_recent_rows: Vec::new(),
@@ -566,7 +571,7 @@ impl SimpleComponent for AppModel {
             rendered_focus_inspector_epoch: 0,
             rendered_preview_visible: !model.preview_visible,
             rendered_preview_width: model.preview_width,
-            rendered_bookmarks: vec!["\0".to_owned()],
+            rendered_bookmarks: None,
             rendered_recent: vec!["\0".to_owned()],
             rendered_workspaces: vec!["\0".to_owned()],
             rendered_remotes: vec!["\0".to_owned()],
@@ -640,6 +645,14 @@ impl SimpleComponent for AppModel {
                 self.start_listing(PaneId::Right, &sender);
             }
             AppMsg::ExecuteCommand(command) => self.execute_command(command, &sender),
+            AppMsg::DevicesChanged => self.devices.refresh(),
+            AppMsg::DeviceMountRemoved(root) => {
+                self.devices.refresh();
+                self.leave_device_paths(&[root], &sender);
+            }
+            AppMsg::OpenDevice(key) => self.start_device_action(&key, false, &sender),
+            AppMsg::RemoveDevice(key) => self.start_device_action(&key, true, &sender),
+            AppMsg::DeviceFinished(result) => self.finish_device_action(result, &sender),
             AppMsg::NavigateActive(path) => self.navigate(self.active_pane, path, &sender),
             AppMsg::SetPaletteQuery(query) => {
                 if self.palette_query != query {
@@ -673,7 +686,9 @@ impl SimpleComponent for AppModel {
             AppMsg::ApplyGlob(pane) => self.start_glob(pane, &sender),
             AppMsg::ActivatePane(pane) => {
                 self.active_pane = pane;
-                self.focus_active_files();
+                // Pointer presses already focus their target. Refocusing the
+                // file view here jumps from an ancestor to the last Miller column
+                // before release, and can scroll the clicked row away.
                 self.ensure_filter_worker(pane, &sender);
                 self.start_preview(&sender);
             }
@@ -735,24 +750,13 @@ impl SimpleComponent for AppModel {
                 self.search_content_preset = content;
             }
             AppMsg::CloseSearch => self.on_close_search(),
+            AppMsg::CancelSearch => self.on_cancel_search(),
             AppMsg::RunSearch(options) => self.start_recursive_search(options, &sender),
             AppMsg::SearchReady { generation, result } => self.on_search_ready(generation, result),
             AppMsg::OpenSearchResult(path) => {
                 self.on_close_search();
                 self.reveal_path(self.active_pane, path, &sender);
             }
-            AppMsg::CompareReady {
-                left,
-                right,
-                result,
-            } => self.on_compare_ready(left, right, result, &sender),
-            AppMsg::SyncCompared {
-                left,
-                right,
-                entries,
-                direction,
-                mirror,
-            } => self.on_sync_compared(left, right, entries, direction, mirror, &sender),
             AppMsg::SyncReady(result) => self.on_sync_ready(result, &sender),
             AppMsg::ChecksumReady { path, result } => {
                 self.tool_cancel = None;
@@ -897,6 +901,9 @@ impl SimpleComponent for AppModel {
                 self.focus_context_target(pane, target);
                 self.start_preview(&sender);
             }
+            AppMsg::PasteInto(pane, destination) => {
+                self.paste_file_clipboard_into(pane, destination, &sender);
+            }
             AppMsg::MoveCursor(delta, extend) => self.on_move_cursor(delta, extend, &sender),
             AppMsg::MoveCursorVertical(delta, extend) => {
                 self.move_cursor_vertical(self.active_pane, delta, extend);
@@ -928,6 +935,11 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::OpenCursor => self.on_open_cursor(&sender),
             AppMsg::Navigate(pane, path) => self.navigate(pane, path, &sender),
+            AppMsg::NavigateExact(pane, path) => self.navigate_exact(pane, path, &sender),
+            AppMsg::CancelLocation(pane) => {
+                self.active_pane = pane;
+                self.focus_active_files();
+            }
             AppMsg::Back(pane) => self.on_back(pane, &sender),
             AppMsg::Forward(pane) => self.on_forward(pane, &sender),
             AppMsg::Up(pane) => {
@@ -938,7 +950,7 @@ impl SimpleComponent for AppModel {
                 {
                     self.move_miller_left(pane, &sender);
                 } else if let Some(parent) = self.pane(pane).active().path.parent() {
-                    self.navigate(pane, parent, &sender);
+                    self.navigate_exact(pane, parent, &sender);
                 }
             }
             AppMsg::Refresh(pane) => self.start_listing(pane, &sender),
@@ -1068,9 +1080,13 @@ impl SimpleComponent for AppModel {
             AppMsg::MoveBookmarkToEnd(from) => self.on_move_bookmark_to_end(from),
             AppMsg::RemoveBookmark(index) => {
                 if index < self.bookmarks.len() {
-                    self.bookmarks.remove(index);
+                    let path = self.bookmarks.remove(index);
+                    self.bookmark_labels.remove(&path.to_string());
                     self.persist_session();
                 }
+            }
+            AppMsg::RenameFavorite { group, path, name } => {
+                self.on_rename_favorite(group, &path, &name)
             }
             AppMsg::CreateFavoriteGroup(name) => self.on_create_favorite_group(name),
             AppMsg::RemoveFavoriteGroup(index) => {
@@ -1131,6 +1147,9 @@ impl SimpleComponent for AppModel {
                 color_theme,
                 parallel_transfers,
             } => self.on_set_settings(appearance, color_theme, parallel_transfers),
+            AppMsg::ManageCustomTools => {
+                dialogs::show_custom_tools_dialog(self.custom_tools.clone(), &sender);
+            }
             AppMsg::SetCustomTools(tools) => {
                 self.custom_tools = tools;
                 self.custom_tools_revision = self.custom_tools_revision.wrapping_add(1);
@@ -1363,10 +1382,21 @@ impl SimpleComponent for AppModel {
                 workspace.set_position(workspace.width().saturating_sub(self.preview_width));
             }
         }
-        widgets.render_sidebar_bookmarks(&self.bookmarks, &self.favorite_groups, &sender);
+        widgets.render_sidebar_bookmarks(
+            &self.bookmarks,
+            &self.bookmark_labels,
+            &self.favorite_groups,
+            &sender,
+        );
         widgets.render_sidebar_recent(&self.recent, &sender);
         widgets.render_sidebar_workspaces(&self.workspaces, &sender);
         widgets.render_sidebar_remotes(&self.remote_uris, &sender);
+        if widgets
+            .sidebar_devices
+            .render(&self.devices, &sender, &widgets.file_drag_ui)
+        {
+            widgets.rendered_active_location = None;
+        }
         widgets.render_sidebar_active(self.pane(self.active_pane).current_directory());
         if widgets.rendered_focus_sidebar_epoch != self.focus_sidebar_epoch {
             widgets.rendered_focus_sidebar_epoch = self.focus_sidebar_epoch;

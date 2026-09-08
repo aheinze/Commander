@@ -34,6 +34,11 @@ cargo xtask check-m1-budgets
 cargo run --release --package dualpane-app
 ```
 
+Run `python3 scripts/test-native.py --backend wayland` for isolated native interaction
+regressions, including the tests normally ignored by `cargo test`. Logs and screenshots
+are saved under `target/native-tests/`. See [release checks](docs/RELEASE_CHECKS.md) for
+dependencies, performance gates, and the installation/remote checks needed before release.
+
 For everyday development, `./dev.sh` launches the current working tree using the
 fast debug profile. Use `./dev.sh --release` for realistic performance, or place
 Commander arguments after `--`, such as `./dev.sh -- --left /tmp`.
@@ -89,16 +94,48 @@ The top bar provides Back, Forward, Parent folder, and Refresh controls. Back an
 Forward are disabled when no history is available. The folder title follows the
 active pane, including the last Miller column; click it to edit the location.
 
+Drag the empty space beside the folder title or the sidebar's window controls to
+move the window. These areas also support the desktop's standard titlebar gestures,
+including double-click to maximize or restore and right-click for the window menu.
+
 New groups folder, file, archive, and tab creation. The current view menu selects
 List, Grid, or Columns and toggles hidden files for the active pane. Layout controls
 the locations sidebar, second file pane, inspector, terminal, and panel orientation.
 More contains search, the command palette, file operations, Recovery, and Settings.
 Menus and tooltips display the shortcuts from the current keymap.
 
-The name filter stays visible at narrow widths, moving onto its own row. It names
-the pane it filters and highlights when a filter is applied. Escape clears it and
-returns focus to the files. At compact widths, menu labels collapse to icons while
-all actions remain available in their labeled menus.
+File context menus put opening, copying, renaming, and Trash first. **More actions**
+contains specialist tools, archives, tags, and permanent deletion. Start typing to
+search every available action, including those under More actions. Arrow keys move
+between actions, Enter runs the focused action or first search result, and Escape
+closes the menu without clearing the file selection. Menus adapt to the clicked
+item or selection; **Paste into folder** uses the clicked folder as its destination.
+
+In Settings, **Manage Context Menu Tools…** opens a list of custom actions with
+enable switches, editing, and removal with Undo. Add or edit an action using named
+fields, a placeholder picker, a command preview, and file-type rules. Saved actions
+and list changes apply immediately; unfinished edits can be cancelled.
+
+The name filter stays centered in the top bar, with a capped width on large windows
+and its own centered row at narrow widths. Resizing preserves the query and text
+selection. It names the pane it filters and highlights when a filter is applied.
+Escape clears it and returns focus to the files. At compact widths, menu labels
+collapse to icons while all actions remain available in their labeled menus.
+
+Breadcrumbs open the exact folder you click, including in Columns. Clicking the
+current folder keeps its selection and history intact. The parent-folder menu
+keeps every ancestor reachable on deep paths and narrow panes. Location edits
+survive background updates; Escape cancels the edit without clearing file selection.
+
+Right-click a Favorite and choose **Rename…** to give the shortcut a custom label.
+This also works inside favorite groups. Clearing the label restores the folder name;
+the shortcut continues to open its original location.
+
+The sidebar updates automatically when devices connect, mount, or disconnect.
+Use the eject button beside a device to safely remove it, or unmount it when
+hardware ejection is unavailable. Removing a drive includes its other mounted
+volumes; the button's tooltip identifies this. Busy devices stay connected and
+show a retry message. Tabs on a removed device return to Home.
 
 ## Column browsing
 
@@ -118,8 +155,9 @@ Refresh reloads the whole visible branch, retaining valid selections by name. So
 and hidden-file changes update the columns; filtering narrows the last column while
 keeping ancestor folders visible. Missing branches are removed after refresh.
 Column widths, expanded paths, selections, and scroll offsets survive restarts and
-navigation between tabs/folders. Folder view mode, sort, and hidden-file preferences
-are restored when returning to a folder.
+navigation between tabs/folders. Sort and hidden-file preferences are restored when
+returning to a folder. The chosen List, Grid, or Columns mode stays with the pane
+across directory and tab navigation and is saved for the next launch.
 
 ## Live folder updates
 

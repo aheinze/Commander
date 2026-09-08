@@ -123,6 +123,8 @@ pub struct FavoriteGroupSession {
     pub name: String,
     #[serde(default)]
     pub paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub labels: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -160,6 +162,8 @@ pub struct SessionState {
     pub preview_width: i32,
     #[serde(default)]
     pub bookmarks: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bookmark_labels: BTreeMap<String, String>,
     #[serde(default)]
     pub favorite_groups: Vec<FavoriteGroupSession>,
     #[serde(default)]
@@ -197,6 +201,7 @@ impl Default for SessionState {
             preview_visible: true,
             preview_width: default_preview_width(),
             bookmarks: Vec::new(),
+            bookmark_labels: BTreeMap::new(),
             favorite_groups: Vec::new(),
             recent: Vec::new(),
             window_width: default_window_width(),
@@ -483,9 +488,11 @@ mod tests {
             preview_visible: true,
             preview_width: 412,
             bookmarks: vec!["/home".to_owned()],
+            bookmark_labels: BTreeMap::from([("/home".to_owned(), "Personal".to_owned())]),
             favorite_groups: vec![FavoriteGroupSession {
                 name: "Projects".to_owned(),
                 paths: vec!["/home/project".to_owned()],
+                labels: BTreeMap::from([("/home/project".to_owned(), "Work / API".to_owned())]),
             }],
             recent: vec!["/tmp".to_owned()],
             window_width: 1_440,
@@ -530,6 +537,23 @@ mod tests {
         let decoded: SessionState = toml_edit::de::from_str(&encoded).expect("decode");
 
         assert_eq!(decoded, state);
+    }
+
+    #[test]
+    fn favorites_without_custom_labels_remain_loadable() {
+        let decoded: SessionState = toml_edit::de::from_str(
+            r#"
+                bookmarks = ["/home/project"]
+                [[favorite_groups]]
+                name = "Work"
+                paths = ["/home/project"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(decoded.bookmarks, ["/home/project"]);
+        assert!(decoded.bookmark_labels.is_empty());
+        assert_eq!(decoded.favorite_groups[0].paths, ["/home/project"]);
+        assert!(decoded.favorite_groups[0].labels.is_empty());
     }
 
     #[test]

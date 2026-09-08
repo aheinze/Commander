@@ -12,10 +12,15 @@ pub(super) struct SearchWidgets {
     pub(super) query: gtk::SearchEntry,
     pub(super) content: gtk::ToggleButton,
     pub(super) status: gtk::Label,
-    pub(super) results: gtk::Box,
-    pub(super) rendered_open: Cell<bool>,
+    details: gtk::MenuButton,
+    error_detail: gtk::Label,
+    pub(super) results: gtk::ListView,
+    pub(super) result_store: gio::ListStore,
+    pub(super) stop: gtk::Button,
+    pub(super) rendered_open: Rc<Cell<bool>>,
+    closing_from_model: Rc<Cell<bool>>,
     pub(super) rendered_preset: Cell<bool>,
-    pub(super) rendered_results: RefCell<Vec<String>>,
+    pub(super) rendered_results: RefCell<Vec<SearchHit>>,
 }
 
 /// A pill toggle used for the search facets.
@@ -35,6 +40,8 @@ fn filter_label(text: &str) -> gtk::Label {
 
 impl SearchWidgets {
     pub(super) fn new(parent: &adw::ApplicationWindow, sender: &ComponentSender<AppModel>) -> Self {
+        let rendered_open = Rc::new(Cell::new(false));
+        let closing_from_model = Rc::new(Cell::new(false));
         let dialog = adw::Dialog::builder()
             .title("Search")
             .content_width(760)
@@ -57,15 +64,28 @@ impl SearchWidgets {
         search.set_valign(gtk::Align::Center);
         query_row.append(&query);
         query_row.append(&search);
+        let stop = gtk::Button::with_label("Stop");
+        stop.set_tooltip_text(Some("Stop the current search"));
+        stop.set_visible(false);
+        {
+            let input = sender.input_sender().clone();
+            stop.connect_clicked(move |_| {
+                let _ = input.send(AppMsg::CancelSearch);
+            });
+        }
+        query_row.append(&stop);
         root.append(&query_row);
 
-        let facets = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let facets = facet_flow();
         facets.add_css_class("search-facets");
         let content = facet_chip("Contents", "Also search inside file contents");
         let hidden = facet_chip("Hidden", "Include hidden files and folders");
         let case_sensitive = facet_chip("Match case", "Case-sensitive matching");
         let regex = facet_chip("Regex", "Treat the query as a regular expression");
-        let symlinks = facet_chip("Symlinks", "Follow symbolic links");
+        let symlinks = facet_chip(
+            "Symlinks",
+            "Include symbolic link entries without following linked folders",
+        );
         symlinks.set_active(true);
         let ignored = facet_chip("Ignored", "Include ignored and build folders");
         for chip in [
@@ -78,9 +98,6 @@ impl SearchWidgets {
         ] {
             facets.append(chip);
         }
-        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        spacer.set_hexpand(true);
-        facets.append(&spacer);
         let filters = facet_chip("Filters", "Type, size, date, and depth limits");
         filters.add_css_class("search-chip-filters");
         facets.append(&filters);
@@ -89,7 +106,7 @@ impl SearchWidgets {
         let advanced = gtk::Box::new(gtk::Orientation::Vertical, 8);
         advanced.add_css_class("search-advanced");
         advanced.set_visible(false);
-        let row_one = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let row_one = facet_flow();
         let kind = gtk::DropDown::from_strings(&["Any type", "Files", "Folders", "Links"]);
         kind.set_tooltip_text(Some("Limit results by item type"));
         let extension = gtk::Entry::new();
@@ -110,26 +127,22 @@ impl SearchWidgets {
         ]);
         row_one.append(&kind);
         row_one.append(&extension);
-        row_one.append(&filter_label("Min MiB"));
-        row_one.append(&min_size);
-        row_one.append(&filter_label("Max MiB"));
-        row_one.append(&max_size);
+        row_one.append(&filter_field("Min MiB", &min_size));
+        row_one.append(&filter_field("Max MiB", &max_size));
         row_one.append(&modified);
         advanced.append(&row_one);
-        let row_two = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let row_two = facet_flow();
         let depth = gtk::SpinButton::with_range(0.0, 100.0, 1.0);
         depth.set_width_chars(3);
         depth.set_value(0.0);
         depth.set_tooltip_text(Some("0 searches every subfolder"));
-        let content_limit = gtk::SpinButton::with_range(1.0, 1_024.0, 1.0);
+        let content_limit =
+            gtk::SpinButton::with_range(1.0, (MAX_CONTENT_BYTES / 1_048_576) as f64, 1.0);
         content_limit.set_width_chars(4);
         content_limit.set_value(8.0);
         content_limit.set_tooltip_text(Some("Maximum file size read during content search"));
-        row_two.append(&filter_label("Depth"));
-        row_two.append(&depth);
-        row_two.append(&filter_label("Content scan limit"));
-        row_two.append(&content_limit);
-        row_two.append(&filter_label("MiB per file"));
+        row_two.append(&filter_field("Depth", &depth));
+        row_two.append(&filter_field("Content limit (MiB/file)", &content_limit));
         advanced.append(&row_two);
         root.append(&advanced);
         {
@@ -140,9 +153,56 @@ impl SearchWidgets {
         let status = gtk::Label::new(Some("Press Enter to search the active folder"));
         status.add_css_class("search-status");
         status.set_xalign(0.0);
-        root.append(&status);
-        let results = gtk::Box::new(gtk::Orientation::Vertical, 1);
+        status.set_wrap(true);
+        status.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        status.set_max_width_chars(70);
+        status.set_hexpand(true);
+        let status_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let error_detail = gtk::Label::new(None);
+        error_detail.set_wrap(true);
+        error_detail.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        error_detail.set_max_width_chars(50);
+        error_detail.set_selectable(true);
+        error_detail.set_margin_top(12);
+        error_detail.set_margin_bottom(12);
+        error_detail.set_margin_start(12);
+        error_detail.set_margin_end(12);
+        let detail_popover = gtk::Popover::new();
+        detail_popover.set_child(Some(&error_detail));
+        let details = gtk::MenuButton::builder()
+            .label("Details")
+            .popover(&detail_popover)
+            .valign(gtk::Align::Center)
+            .build();
+        details.add_css_class("flat");
+        details.set_margin_end(16);
+        details.set_tooltip_text(Some("Why some items could not be searched"));
+        details.set_visible(false);
+        status_row.append(&status);
+        status_row.append(&details);
+        root.append(&status_row);
+        let result_store = gio::ListStore::new::<glib::BoxedAnyObject>();
+        let results = gtk::ListView::new(
+            Some(gtk::NoSelection::new(Some(result_store.clone()))),
+            Some(result_factory()),
+        );
+        results.set_single_click_activate(true);
         results.add_css_class("search-results");
+        results.add_css_class("navigation-sidebar");
+        {
+            let input = sender.input_sender().clone();
+            let result_store = result_store.clone();
+            results.connect_activate(move |_, position| {
+                if let Some(item) = result_store
+                    .item(position)
+                    .and_downcast::<glib::BoxedAnyObject>()
+                {
+                    let _ = input.send(AppMsg::OpenSearchResult(
+                        item.borrow::<SearchHit>().path.clone(),
+                    ));
+                }
+            });
+        }
         let scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
             .vscrollbar_policy(gtk::PolicyType::Automatic)
@@ -227,8 +287,30 @@ impl SearchWidgets {
         }
         {
             let input = sender.input_sender().clone();
-            dialog.connect_closed(move |_| {
-                let _ = input.send(AppMsg::CloseSearch);
+            let rendered_open = Rc::clone(&rendered_open);
+            let closing_from_model = Rc::clone(&closing_from_model);
+            let parent = parent.downgrade();
+            dialog.connect_closed(move |dialog| {
+                if closing_from_model.replace(false) {
+                    // Finish the old close before honoring a rapid reopen.
+                    // Otherwise the old animation can close the new dialog.
+                    let dialog = dialog.downgrade();
+                    let parent = parent.clone();
+                    let rendered_open = Rc::clone(&rendered_open);
+                    let closing_from_model = Rc::clone(&closing_from_model);
+                    glib::idle_add_local_once(move || {
+                        if rendered_open.get()
+                            && !closing_from_model.get()
+                            && let (Some(dialog), Some(parent)) =
+                                (dialog.upgrade(), parent.upgrade())
+                        {
+                            dialog.present(Some(&parent));
+                        }
+                    });
+                } else {
+                    rendered_open.set(false);
+                    let _ = input.send(AppMsg::CloseSearch);
+                }
             });
         }
 
@@ -238,20 +320,30 @@ impl SearchWidgets {
             query,
             content,
             status,
+            details,
+            error_detail,
             results,
-            rendered_open: Cell::new(false),
+            result_store,
+            stop,
+            rendered_open,
+            closing_from_model,
             rendered_preset: Cell::new(false),
             rendered_results: RefCell::new(Vec::new()),
         }
     }
 
-    pub(super) fn render(&self, model: &AppModel, sender: &ComponentSender<AppModel>) {
+    pub(super) fn render(&self, model: &AppModel, _sender: &ComponentSender<AppModel>) {
         if self.rendered_open.replace(model.search_open) != model.search_open {
             if model.search_open {
-                self.dialog.present(Some(&self.parent));
+                if !self.closing_from_model.get() {
+                    self.dialog.present(Some(&self.parent));
+                }
                 self.query.grab_focus();
-            } else {
-                self.dialog.close();
+            } else if !self.closing_from_model.get() {
+                self.closing_from_model.set(true);
+                if !self.dialog.close() {
+                    self.closing_from_model.set(false);
+                }
             }
         }
         if !model.search_open {
@@ -261,80 +353,106 @@ impl SearchWidgets {
         {
             self.content.set_active(model.search_content_preset);
         }
-        self.status.set_label(if model.search_loading {
-            "Searching…"
+        self.stop.set_visible(model.search_loading);
+        let report = &model.search_results;
+        let summary = if model.search_loading {
+            "Searching…".to_owned()
         } else if let Some(error) = &model.search_error {
-            error
-        } else if model.search_results.is_empty() {
-            "No matching files"
+            error.clone()
+        } else if model.search_generation == 0 && report.hits.is_empty() {
+            "Press Enter to search the active folder".to_owned()
         } else {
-            return self.render_results(model, sender);
-        });
-        if model.search_loading || model.search_results.is_empty() {
-            while let Some(child) = self.results.first_child() {
-                self.results.remove(&child);
+            report.summary()
+        };
+        self.status.set_label(&summary);
+        self.status.set_tooltip_text(report.first_error.as_deref());
+        self.details.set_visible(report.first_error.is_some());
+        self.error_detail
+            .set_label(report.first_error.as_deref().unwrap_or_default());
+        if model.search_error.is_some() || report.skipped_entries > 0 || report.limit_reached {
+            self.status.add_css_class("warning");
+        } else {
+            self.status.remove_css_class("warning");
+        }
+        if *self.rendered_results.borrow() != report.hits {
+            let items: Vec<_> = report
+                .hits
+                .iter()
+                .cloned()
+                .map(glib::BoxedAnyObject::new)
+                .collect();
+            self.result_store
+                .splice(0, self.result_store.n_items(), &items);
+            self.rendered_results.replace(report.hits.clone());
+            if let Some(adjustment) = self.results.vadjustment() {
+                adjustment.set_value(0.0);
             }
-            self.rendered_results.borrow_mut().clear();
         }
     }
+}
 
-    pub(super) fn render_results(&self, model: &AppModel, sender: &ComponentSender<AppModel>) {
-        self.status
-            .set_label(&format!("{} results", model.search_results.len()));
-        let signature: Vec<_> = model
-            .search_results
-            .iter()
-            .map(|hit| format!("{}:{}", hit.path, hit.content_match))
-            .collect();
-        if *self.rendered_results.borrow() == signature {
-            return;
-        }
-        *self.rendered_results.borrow_mut() = signature;
-        while let Some(child) = self.results.first_child() {
-            self.results.remove(&child);
-        }
-        for hit in model.search_results.iter().take(2_000) {
-            let row = gtk::Button::new();
-            row.add_css_class("flat");
-            row.add_css_class("search-result-row");
-            row.set_tooltip_text(Some("Show in containing folder"));
-            let content = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-            let icon = gtk::Image::new();
-            crate::icons::set_file_icon(&icon, hit.kind, hit.path.file_name().unwrap_or_default());
-            icon.set_pixel_size(16);
-            icon.add_css_class("search-result-icon");
-            let labels = gtk::Box::new(gtk::Orientation::Vertical, 1);
-            labels.set_hexpand(true);
-            let name = gtk::Label::new(Some(
-                hit.path
-                    .file_name()
-                    .and_then(OsStr::to_str)
-                    .unwrap_or("Item"),
-            ));
-            name.set_xalign(0.0);
-            name.add_css_class("search-result-name");
-            let path = gtk::Label::new(Some(&hit.path.to_string()));
-            path.set_xalign(0.0);
-            path.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-            path.add_css_class("search-result-path");
-            labels.append(&name);
-            labels.append(&path);
-            let detail = gtk::Label::new(Some(&format!(
+fn facet_flow() -> gtk::FlowBox {
+    gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .min_children_per_line(1)
+        .max_children_per_line(7)
+        .row_spacing(6)
+        .column_spacing(6)
+        .build()
+}
+
+fn filter_field(label: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
+    let field = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+    field.append(&filter_label(label));
+    field.append(control);
+    field
+}
+
+fn result_factory() -> gtk::SignalListItemFactory {
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(|_, object| {
+        let item = object.downcast_ref::<gtk::ListItem>().unwrap();
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        row.add_css_class("search-result-row");
+        let icon = gtk::Image::new();
+        icon.set_pixel_size(20);
+        icon.add_css_class("search-result-icon");
+        let labels = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        labels.set_hexpand(true);
+        let name = gtk::Label::new(None);
+        name.set_xalign(0.0);
+        name.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        name.set_width_chars(1);
+        name.add_css_class("search-result-name");
+        let path = gtk::Label::new(None);
+        path.set_xalign(0.0);
+        path.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+        path.set_width_chars(1);
+        path.add_css_class("search-result-path");
+        labels.append(&name);
+        labels.append(&path);
+        let detail = gtk::Label::new(None);
+        detail.add_css_class("search-result-detail");
+        row.append(&icon);
+        row.append(&labels);
+        row.append(&detail);
+        item.set_child(Some(&row));
+        item.connect_notify_local(Some("item"), move |item, _| {
+            let Some(value) = item.item().and_downcast::<glib::BoxedAnyObject>() else {
+                return;
+            };
+            let hit = value.borrow::<SearchHit>();
+            let file_name = hit.path.file_name().unwrap_or_default();
+            crate::icons::set_file_icon(&icon, hit.kind, file_name);
+            name.set_label(&file_name.to_string_lossy());
+            path.set_label(&hit.path.to_string());
+            row.set_tooltip_text(Some(&format!("{}\nShow in containing folder", hit.path)));
+            detail.set_label(&format!(
                 "{}{}",
                 format_size(hit.size, hit.kind),
                 if hit.content_match { " · content" } else { "" }
-            )));
-            detail.add_css_class("search-result-detail");
-            content.append(&icon);
-            content.append(&labels);
-            content.append(&detail);
-            row.set_child(Some(&content));
-            let input = sender.input_sender().clone();
-            let target = hit.path.clone();
-            row.connect_clicked(move |_| {
-                let _ = input.send(AppMsg::OpenSearchResult(target.clone()));
-            });
-            self.results.append(&row);
-        }
-    }
+            ));
+        });
+    });
+    factory
 }

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gresources>
   <gresource prefix="/org/example/Dualpane/icons">
+    <file compressed="true" alias="scalable/apps/org.example.Dualpane.svg">branding/commander.svg</file>
     <file compressed="true" alias="scalable/actions/commander-app-window-symbolic.svg">icons/app-window.svg</file>
     <file compressed="true" alias="scalable/actions/commander-archive-symbolic.svg">icons/archive.svg</file>
     <file compressed="true" alias="scalable/actions/commander-arrow-down-a-z-symbolic.svg">icons/arrow-down-a-z.svg</file>
@@ -16,10 +17,13 @@
     <file compressed="true" alias="scalable/actions/commander-columns-2-symbolic.svg">icons/columns-2.svg</file>
     <file compressed="true" alias="scalable/actions/commander-columns-3-symbolic.svg">icons/columns-3.svg</file>
     <file compressed="true" alias="scalable/actions/commander-copy-symbolic.svg">icons/copy.svg</file>
+    <file compressed="true" alias="scalable/actions/commander-clipboard-symbolic.svg">icons/clipboard.svg</file>
+    <file compressed="true" alias="scalable/actions/commander-scissors-symbolic.svg">icons/scissors.svg</file>
     <file compressed="true" alias="scalable/actions/commander-corner-up-right-symbolic.svg">icons/corner-up-right.svg</file>
     <file compressed="true" alias="scalable/actions/commander-database-symbolic.svg">icons/database.svg</file>
     <file compressed="true" alias="scalable/actions/commander-download-symbolic.svg">icons/download.svg</file>
     <file compressed="true" alias="scalable/actions/commander-ellipsis-symbolic.svg">icons/ellipsis.svg</file>
+    <file compressed="true" alias="scalable/actions/commander-eject-symbolic.svg">icons/eject.svg</file>
     <file compressed="true" alias="scalable/actions/commander-eye-symbolic.svg">icons/eye.svg</file>
     <file compressed="true" alias="scalable/actions/commander-file-symbolic.svg">icons/file.svg</file>
     <file compressed="true" alias="scalable/actions/commander-file-archive-symbolic.svg">icons/file-archive.svg</file>

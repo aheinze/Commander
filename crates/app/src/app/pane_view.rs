@@ -199,7 +199,9 @@ pub(super) struct PaneWidgets {
     pub(super) tab_bar: gtk::Box,
     pub(super) breadcrumb_stack: gtk::Stack,
     pub(super) breadcrumb_box: gtk::Box,
+    pub(super) breadcrumb_overflow: gtk::MenuButton,
     pub(super) path_entry: gtk::Entry,
+    location_focus: gtk::EventControllerFocus,
     pub(super) sort_dropdown: gtk::DropDown,
     pub(super) sort_direction: gtk::Button,
     pub(super) glob_revealer: gtk::Revealer,
@@ -254,7 +256,7 @@ pub(super) struct PaneWidgets {
     pub(super) pane_drag: Rc<RefCell<PaneDragState>>,
     pub(super) file_drag_ui: Rc<FileDragUiState>,
     pub(super) rendered_tags_revision: u64,
-    pub(super) rendered_breadcrumb_path: String,
+    pub(super) rendered_breadcrumb_path: Option<VPath>,
 }
 
 pub(super) struct MillerColumnWidgets {
@@ -265,8 +267,47 @@ pub(super) struct MillerColumnWidgets {
     pub(super) container: gtk::Box,
     pub(super) model: Option<ListingListModel>,
     pub(super) view: Option<gtk::ListView>,
+    rows: Rc<MillerRows>,
     pub(super) loading: bool,
     pub(super) error: Option<String>,
+}
+
+#[derive(Default)]
+pub(super) struct MillerRows {
+    navigation_row: Cell<Option<u32>>,
+    items: RefCell<Vec<glib::WeakRef<gtk::ListItem>>>,
+}
+
+impl MillerRows {
+    fn style_item(&self, item: &gtk::ListItem) {
+        if let Some(child) = item.child() {
+            if self.navigation_row.get() == Some(item.position()) {
+                child.add_css_class("miller-path");
+            } else {
+                child.remove_css_class("miller-path");
+            }
+        }
+    }
+
+    fn set_navigation_row(&self, row: Option<u32>) {
+        if self.navigation_row.replace(row) != row {
+            self.items.borrow_mut().retain(|weak| {
+                let Some(item) = weak.upgrade() else {
+                    return false;
+                };
+                self.style_item(&item);
+                true
+            });
+        }
+    }
+
+    fn focused_row(&self) -> Option<u32> {
+        self.items.borrow().iter().find_map(|weak| {
+            let item = weak.upgrade()?;
+            let row = item.child()?.parent()?;
+            row.is_focus().then_some(item.position())
+        })
+    }
 }
 
 fn install_miller_resize_handle(
@@ -380,7 +421,7 @@ impl PaneWidgets {
         breadcrumb_box.add_css_class("breadcrumbs");
         breadcrumb_box.set_hexpand(true);
         let breadcrumb_scrolled = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
+            .hscrollbar_policy(gtk::PolicyType::External)
             .vscrollbar_policy(gtk::PolicyType::Never)
             .min_content_width(1)
             .propagate_natural_width(false)
@@ -392,12 +433,21 @@ impl PaneWidgets {
             .connect_changed(|adjustment| {
                 adjustment.set_value((adjustment.upper() - adjustment.page_size()).max(0.0));
             });
+        let breadcrumb_overflow = gtk::MenuButton::new();
+        breadcrumb_overflow.add_css_class("flat");
+        breadcrumb_overflow.add_css_class("breadcrumb-icon");
+        breadcrumb_overflow.set_icon_name("commander-ellipsis-symbolic");
+        breadcrumb_overflow.set_tooltip_text(Some("Parent folders"));
+        breadcrumb_overflow.update_property(&[gtk::accessible::Property::Label("Parent folders")]);
+        let breadcrumb_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        breadcrumb_row.append(&breadcrumb_overflow);
+        breadcrumb_row.append(&breadcrumb_scrolled);
         let breadcrumb_stack = gtk::Stack::new();
         breadcrumb_stack.set_hexpand(true);
         breadcrumb_stack.set_hhomogeneous(false);
         breadcrumb_stack.set_transition_type(gtk::StackTransitionType::Crossfade);
         breadcrumb_stack.set_transition_duration(100);
-        breadcrumb_stack.add_named(&breadcrumb_scrolled, Some("breadcrumbs"));
+        breadcrumb_stack.add_named(&breadcrumb_row, Some("breadcrumbs"));
         breadcrumb_stack.add_named(&path_entry, Some("location"));
         breadcrumb_stack.set_visible_child_name("breadcrumbs");
         let sort_dropdown = gtk::DropDown::from_strings(&["Name", "Size", "Modified", "Type"]);
@@ -448,18 +498,42 @@ impl PaneWidgets {
         connect_button(&up, sender, move || AppMsg::Up(pane));
         {
             let input = sender.input_sender().clone();
+            let location = Rc::clone(&pane_drag);
             path_entry.connect_activate(move |entry| {
-                let _ = input.send(AppMsg::Navigate(pane, VPath::from(entry.text().as_str())));
+                let text = entry.text();
+                // Keep native bytes when the displayed location was submitted unchanged.
+                let path = location
+                    .borrow()
+                    .current_directory
+                    .as_ref()
+                    .filter(|path| path.to_string() == text)
+                    .cloned()
+                    .unwrap_or_else(|| VPath::from(text.as_str()));
+                let _ = input.send(AppMsg::NavigateExact(pane, path));
             });
         }
+        let location_focus = gtk::EventControllerFocus::new();
         {
-            let stack = breadcrumb_stack.clone();
-            path_entry.connect_has_focus_notify(move |entry| {
-                if !entry.has_focus() {
+            let stack = breadcrumb_stack.downgrade();
+            location_focus.connect_leave(move |_| {
+                if let Some(stack) = stack.upgrade() {
                     stack.set_visible_child_name("breadcrumbs");
                 }
             });
         }
+        path_entry.add_controller(location_focus.clone());
+        let keys = gtk::EventControllerKey::new();
+        keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let input = sender.input_sender().clone();
+        keys.connect_key_pressed(move |_, key, _, _| {
+            if key == gdk::Key::Escape {
+                let _ = input.send(AppMsg::CancelLocation(pane));
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+        path_entry.add_controller(keys);
         {
             let input = sender.input_sender().clone();
             sort_dropdown.connect_selected_notify(move |dropdown| {
@@ -549,6 +623,7 @@ impl PaneWidgets {
             sender,
             keymap.clone(),
             Rc::clone(&custom_tool_store),
+            Rc::clone(&pane_drag),
         );
 
         let list_scrolled = gtk::ScrolledWindow::builder()
@@ -612,6 +687,7 @@ impl PaneWidgets {
             sender,
             keymap.clone(),
             Rc::clone(&custom_tool_store),
+            Rc::clone(&pane_drag),
         );
         let grid_scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -707,7 +783,9 @@ impl PaneWidgets {
             tab_bar,
             breadcrumb_stack,
             breadcrumb_box,
+            breadcrumb_overflow,
             path_entry,
+            location_focus,
             sort_dropdown,
             sort_direction,
             glob_revealer,
@@ -761,11 +839,14 @@ impl PaneWidgets {
             pane_drag,
             file_drag_ui,
             rendered_tags_revision: u64::MAX,
-            rendered_breadcrumb_path: String::new(),
+            rendered_breadcrumb_path: None,
         }
     }
 
     pub(super) fn focus_location(&self) {
+        if let Some(path) = self.pane_drag.borrow().current_directory.as_ref() {
+            self.path_entry.set_text(&path.to_string());
+        }
         self.breadcrumb_stack.set_visible_child_name("location");
         self.path_entry.grab_focus();
         self.path_entry.select_region(0, -1);
@@ -836,12 +917,14 @@ impl PaneWidgets {
             }
         }
         let path = state.current_directory().to_string();
-        if !self.path_entry.has_focus() && self.path_entry.text().as_str() != path {
+        if !self.location_focus.contains_focus() && self.path_entry.text().as_str() != path {
             self.path_entry.set_text(&path);
             self.path_entry.set_position(0);
         }
-        if self.rendered_breadcrumb_path != path || self.rendered_tags_revision != tags_revision {
-            self.rendered_breadcrumb_path.clone_from(&path);
+        if self.rendered_breadcrumb_path.as_ref() != Some(state.current_directory())
+            || self.rendered_tags_revision != tags_revision
+        {
+            self.rendered_breadcrumb_path = Some(state.current_directory().clone());
             while let Some(child) = self.breadcrumb_box.first_child() {
                 self.breadcrumb_box.remove(&child);
             }
@@ -852,12 +935,54 @@ impl PaneWidgets {
                 ancestors.push(current);
             }
             ancestors.reverse();
-            let visible_from = ancestors.len().saturating_sub(5);
-            if visible_from > 0 {
-                let ellipsis = gtk::Label::new(Some("…"));
-                ellipsis.add_css_class("breadcrumb-separator");
-                self.breadcrumb_box.append(&ellipsis);
+            let parents = gtk::ListBox::new();
+            parents.set_selection_mode(gtk::SelectionMode::Single);
+            parents.set_activate_on_single_click(true);
+            let destinations: Vec<_> = ancestors.iter().rev().skip(1).cloned().collect();
+            for destination in &destinations {
+                let label = gtk::Label::new(Some(&destination.to_string()));
+                label.set_xalign(0.0);
+                label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+                label.set_max_width_chars(36);
+                label.set_margin_start(8);
+                label.set_margin_end(8);
+                label.set_margin_top(7);
+                label.set_margin_bottom(7);
+                let row = gtk::ListBoxRow::new();
+                row.set_child(Some(&label));
+                row.set_tooltip_text(Some(&destination.to_string()));
+                row.update_property(&[gtk::accessible::Property::Label(&destination.to_string())]);
+                parents.append(&row);
             }
+            let popover = gtk::Popover::new();
+            popover.set_has_arrow(false);
+            popover.add_css_class("breadcrumb-ancestors");
+            let scroll = gtk::ScrolledWindow::builder()
+                .hscrollbar_policy(gtk::PolicyType::Never)
+                .vscrollbar_policy(gtk::PolicyType::Automatic)
+                .overlay_scrolling(false)
+                .propagate_natural_height(true)
+                .propagate_natural_width(true)
+                .min_content_width(280)
+                .max_content_width(360)
+                .max_content_height(320)
+                .child(&parents)
+                .build();
+            popover.set_child(Some(&scroll));
+            let input = sender.input_sender().clone();
+            let pane = self.pane;
+            let weak = popover.downgrade();
+            parents.connect_row_activated(move |_, row| {
+                if let Some(path) = destinations.get(row.index() as usize) {
+                    let _ = input.send(AppMsg::NavigateExact(pane, path.clone()));
+                }
+                if let Some(popover) = weak.upgrade() {
+                    popover.popdown();
+                }
+            });
+            self.breadcrumb_overflow.set_visible(ancestors.len() > 1);
+            self.breadcrumb_overflow.set_popover(Some(&popover));
+            let visible_from = ancestors.len().saturating_sub(5);
             for (index, ancestor) in ancestors.into_iter().enumerate().skip(visible_from) {
                 if index > visible_from {
                     let separator = gtk::Label::new(Some("›"));
@@ -866,21 +991,33 @@ impl PaneWidgets {
                 }
                 let label = ancestor
                     .file_name()
-                    .and_then(OsStr::to_str)
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or("/");
+                    .map(display_name)
+                    .unwrap_or_else(|| "/".to_owned());
                 let content = gtk::Box::new(gtk::Orientation::Horizontal, 5);
                 if let Some(color) = self.tag_store.borrow().get(&ancestor.to_string()) {
                     let indicator = tag_indicator();
                     apply_tag_indicator(&indicator, Some(color));
                     content.append(&indicator);
                 }
-                content.append(&gtk::Label::new(Some(label)));
+                let text = gtk::Label::new(Some(&label));
+                text.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+                text.set_max_width_chars(18);
+                let minimum = if &ancestor == state.current_directory() {
+                    12
+                } else {
+                    5
+                };
+                text.set_width_chars(label.chars().count().min(minimum) as i32);
+                content.append(&text);
                 let button = gtk::Button::new();
                 button.add_css_class("flat");
                 button.add_css_class("breadcrumb-button");
                 button.set_child(Some(&content));
                 button.set_tooltip_text(Some(&ancestor.to_string()));
+                button.update_property(&[gtk::accessible::Property::Label(&ancestor.to_string())]);
+                if &ancestor == state.current_directory() {
+                    button.add_css_class("current-folder");
+                }
                 let destination = ancestor.clone();
                 let drop_destination = ancestor.clone();
                 install_file_drop_target(
@@ -892,7 +1029,7 @@ impl PaneWidgets {
                 let input = sender.input_sender().clone();
                 let pane = self.pane;
                 button.connect_clicked(move |_| {
-                    let _ = input.send(AppMsg::Navigate(pane, destination.clone()));
+                    let _ = input.send(AppMsg::NavigateExact(pane, destination.clone()));
                 });
                 self.breadcrumb_box.append(&button);
             }
@@ -1292,13 +1429,18 @@ impl PaneWidgets {
                 });
                 placeholder.append(&retry);
             }
+            let rows = Rc::new(MillerRows::default());
             let (model, view, scroll) = if let Some(listing) = column.listing.clone() {
                 let model = ListingListModel::new();
                 model.set_listing(Some(listing));
                 let input = sender.input_sender().clone();
                 let pane = self.pane;
                 let path = column.path.clone();
+                let selection_rows = Rc::clone(&rows);
                 model.set_selection_callback(move |selection, row| {
+                    // GTK reports ranges in ascending order. The focused row
+                    // identifies the clicked endpoint, including upward ranges.
+                    let row = selection_rows.focused_row().or(row);
                     let _ = input.send(AppMsg::MillerSelectionChanged {
                         pane,
                         column: column_index,
@@ -1308,6 +1450,7 @@ impl PaneWidgets {
                     });
                 });
                 let factory = build_column_browser_factory(
+                    Rc::clone(&rows),
                     Rc::clone(&self.tag_store),
                     Rc::clone(&self.pane_drag),
                     Rc::clone(&self.file_drag_ui),
@@ -1409,6 +1552,7 @@ impl PaneWidgets {
                     sender,
                     self.keymap.clone(),
                     Rc::clone(&self.custom_tool_store),
+                    Rc::clone(&self.pane_drag),
                 );
                 let scroll = gtk::ScrolledWindow::builder()
                     .hscrollbar_policy(gtk::PolicyType::Never)
@@ -1451,6 +1595,7 @@ impl PaneWidgets {
                 container,
                 model,
                 view,
+                rows,
                 count,
                 placeholder,
                 scroll,
@@ -1493,6 +1638,14 @@ impl PaneWidgets {
                 scroll.set_visible(!empty);
             }
             if let Some((model, listing)) = widgets.model.as_ref().zip(column.listing.clone()) {
+                // GTK resets its focus tracker when rows are replaced. Remember
+                // the focused entry before a refresh can bind that row to a
+                // different file, including in an ancestor column.
+                let focused = widgets.rows.focused_row().and_then(|row| {
+                    let previous = model.listing()?;
+                    let entry = previous.row(row as usize)?;
+                    Some(SelectionKey::for_entry(previous.parent(), entry))
+                });
                 if self.rendered_scroll_restore != state.scroll_restore_epoch {
                     self.restoring_scroll.set(true);
                 }
@@ -1509,21 +1662,33 @@ impl PaneWidgets {
                 if tags_changed {
                     model.refresh_visible();
                 }
-                let mut selection = if deepest {
-                    state.selection.clone()
-                } else {
-                    Selection::new()
-                };
-                if (!deepest || state.selection.is_empty())
-                    && let Some(entry) = column
-                        .selected_row
-                        .and_then(|row| listing.row(row as usize))
-                {
-                    selection
-                        .select_preserving_anchor(SelectionKey::for_entry(listing.parent(), entry));
+                let mut selection = state.selection.clone();
+                if !selection.is_empty() {
+                    let available = listing
+                        .rows()
+                        .map(|entry| SelectionKey::for_entry(listing.parent(), entry))
+                        .filter(|key| selection.contains(key))
+                        .collect();
+                    selection.retain_available(&available);
                 }
-                // Rendering a cursor must not emit a user-selection callback.
+                // The open branch is a navigation hint, not a GTK selection.
+                // Each column's model contains only its actually selected items.
+                widgets
+                    .rows
+                    .set_navigation_row((!deepest).then_some(column.selected_row).flatten());
                 model.set_stable_selection(&selection);
+                if let Some(key) = focused
+                    && let Some(view) = &widgets.view
+                    && let Some(row) = listing
+                        .rows()
+                        .position(|entry| SelectionKey::for_entry(listing.parent(), entry) == key)
+                        .map(|row| row as u32)
+                        .or(column.selected_row)
+                    && widgets.rows.focused_row() != Some(row)
+                {
+                    view.scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
+                    view.grab_focus();
+                }
             }
         }
         let adjustment = self.miller_hadjustment.clone();
@@ -2029,12 +2194,14 @@ pub(super) fn build_grid_factory(
 }
 
 pub(super) fn build_column_browser_factory(
+    rows: Rc<MillerRows>,
     tag_store: Rc<RefCell<BTreeMap<String, String>>>,
     pane_drag: Rc<RefCell<PaneDragState>>,
     file_drag_ui: Rc<FileDragUiState>,
     sender: &ComponentSender<AppModel>,
 ) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
+    let setup_rows = Rc::clone(&rows);
     let setup_pane_drag = Rc::clone(&pane_drag);
     let setup_file_drag_ui = Rc::clone(&file_drag_ui);
     let setup_sender = sender.clone();
@@ -2042,6 +2209,9 @@ pub(super) fn build_column_browser_factory(
         let item = item
             .downcast_ref::<gtk::ListItem>()
             .expect("factory item must be a ListItem");
+        let mut items = setup_rows.items.borrow_mut();
+        items.retain(|weak| weak.upgrade().is_some());
+        items.push(item.downgrade());
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         row.add_css_class("column-browser-row");
         let icon = gtk::Image::new();
@@ -2078,6 +2248,7 @@ pub(super) fn build_column_browser_factory(
         let item = item
             .downcast_ref::<gtk::ListItem>()
             .expect("factory item must be a ListItem");
+        rows.style_item(item);
         let Some(container) = item.child().and_downcast::<gtk::Box>() else {
             return;
         };

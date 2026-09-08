@@ -142,6 +142,7 @@ def stage_application(stage, binary):
         "usr/bin/commander": binary,
         f"usr/share/applications/{APP_ID}.desktop": ROOT / "packaging" / f"{APP_ID}.desktop",
         f"usr/share/icons/hicolor/512x512/apps/{APP_ID}.png": ROOT / "packaging" / f"{APP_ID}.png",
+        f"usr/share/icons/hicolor/scalable/apps/{APP_ID}.svg": ROOT / "crates/app/assets/branding/commander.svg",
         "usr/share/doc/commander/README.md": ROOT / "README.md",
     }
     for source in ROOT.glob("LICENSE*"):

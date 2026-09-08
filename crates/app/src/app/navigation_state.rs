@@ -153,7 +153,7 @@ impl PaneState {
     pub(super) fn restore_navigation(&mut self) {
         let root = self.active().path.clone();
         if let Some(saved) = self.folder_views.get(&root.to_string()) {
-            self.view_mode = saved.view_mode;
+            // The pane owns the view mode; folder history must not override the user's choice.
             self.sort.key = match saved.sort_key {
                 PaneSortKey::Name => SortKey::Name,
                 PaneSortKey::Size => SortKey::Size,

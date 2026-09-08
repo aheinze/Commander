@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod compatibility;
+
 thread_local! {
     static APPEARANCE_CSS: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
     static THEME_CSS: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
@@ -10,7 +12,12 @@ thread_local! {
 pub(super) fn install_styles(appearance: AppearanceMode) {
     apply_appearance(appearance);
     let provider = gtk::CssProvider::new();
-    provider.load_from_string(include_str!("../../assets/style.css"));
+    let css = include_str!("../../assets/style.css");
+    if gtk::minor_version() < 16 {
+        provider.load_from_string(&compatibility::legacy_stylesheet(css));
+    } else {
+        provider.load_from_string(css);
+    }
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(
             &display,
