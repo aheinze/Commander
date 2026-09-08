@@ -87,6 +87,10 @@ The `.github/workflows/release.yml` workflow builds all four formats for x86_64
 and ARM64 on Ubuntu 24.04, then attaches the eight packages, two architecture
 manifests, and a combined `SHA256SUMS` file to a GitHub Release.
 
+Version-tag pushes (`v*`) start the Release workflow only. Ordinary branch pushes
+and pull requests do not start workflows. The separate CI suite remains available
+from **Actions → CI → Run workflow** for an explicit validation run.
+
 One-time setup: in the repository's **Settings → Secrets and variables → Actions
 → Variables**, add `RELEASE_MAINTAINER` with a value such as
 `Your Name <you@example.org>`. GitHub's built-in `GITHUB_TOKEN` handles publication;
