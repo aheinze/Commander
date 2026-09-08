@@ -1,6 +1,22 @@
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 impl PaneState {
+    /// Enter a folder with one predictable keyboard cursor and no marked files.
+    /// History and existing-tab restoration use `reset_directory_view` instead.
+    pub(super) fn reset_for_folder_entry(&mut self) {
+        self.reset_directory_view();
+        self.restore_names.clear();
+        self.restore_cursor = None;
+        self.scroll_y = 0;
+        if let Some(column) = self.miller_columns.last_mut() {
+            column.restore_name = None;
+            column.scroll_y = 0;
+        }
+    }
+
     /// Resolve by path only after the final sorted listing has arrived.
     pub(super) fn reveal_pending_item(&mut self) {
         if self.loading || self.filtering {

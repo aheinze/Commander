@@ -20,7 +20,9 @@ impl AppModel {
     }
 
     pub(super) fn on_bookmark(&mut self) -> Option<AppMsg> {
-        let path = self.pane(self.active_pane).current_directory().clone();
+        let path = self
+            .archive_mounts
+            .display(self.pane(self.active_pane).current_directory());
         if !self.bookmarks.contains(&path) {
             self.bookmarks.push(path);
             self.persist_session();
@@ -87,12 +89,15 @@ impl AppModel {
     }
 
     pub(super) fn on_open_in_new_tab(&mut self, sender: &ComponentSender<Self>) -> Option<AppMsg> {
-        if let Some((path, EntryKind::Directory)) = self.focused_item(self.active_pane) {
+        if let Some((path, kind)) = self.focused_item(self.active_pane)
+            && (kind == EntryKind::Directory || is_archive_path(&path))
+        {
             let pane = self.active_pane;
             let state = self.pane_mut(pane);
+            state.remember_navigation();
             state.tabs.push(TabState::new(path));
             state.active_tab = state.tabs.len() - 1;
-            state.reset_directory_view();
+            state.reset_for_folder_entry();
             state.tabs_revision = state.tabs_revision.wrapping_add(1);
             self.start_listing(pane, sender);
             self.persist_session();
@@ -102,6 +107,12 @@ impl AppModel {
 
     pub(super) fn on_open_other_pane(&mut self, sender: &ComponentSender<Self>) -> Option<AppMsg> {
         if let Some((path, kind)) = self.focused_item(self.active_pane) {
+            if kind != EntryKind::Directory && is_archive_path(&path) {
+                let other = self.active_pane.other();
+                self.active_pane = other;
+                self.start_archive_browse(other, path, sender);
+                return None;
+            }
             let destination = if kind == EntryKind::Directory {
                 path
             } else {
@@ -123,7 +134,7 @@ impl AppModel {
             display.clipboard().set_text(
                 &paths
                     .iter()
-                    .map(ToString::to_string)
+                    .map(|path| self.archive_mounts.display(path).to_string())
                     .collect::<Vec<_>>()
                     .join("\n"),
             );
@@ -133,9 +144,12 @@ impl AppModel {
 
     pub(super) fn on_copy_directory_path(&mut self) -> Option<AppMsg> {
         if let Some(display) = gdk::Display::default() {
-            display
-                .clipboard()
-                .set_text(&self.pane(self.active_pane).current_directory().to_string());
+            display.clipboard().set_text(
+                &self
+                    .archive_mounts
+                    .display(self.pane(self.active_pane).current_directory())
+                    .to_string(),
+            );
         }
         None
     }
@@ -165,12 +179,40 @@ impl AppModel {
             self.pane_mut(self.active_pane).error =
                 Some("No item is available to delete".to_owned());
         } else {
-            show_permanent_delete_dialog(count, sender);
+            show_permanent_delete_dialog(count, self.folder_action_input(sender));
         }
         None
     }
 
     pub(super) fn on_permissions(&mut self, sender: &ComponentSender<Self>) -> Option<AppMsg> {
+        if let Some(target) = self.folder_action_target.clone() {
+            let vfs = Arc::clone(&self.vfs);
+            let input = sender.input_sender().clone();
+            match thread::Builder::new()
+                .name("dualpane-folder-permissions".to_owned())
+                .spawn(move || {
+                    let result = vfs
+                        .stat(&target.path, false)
+                        .map_err(|error| format!("Could not read folder permissions: {error}"))
+                        .and_then(|metadata| {
+                            metadata
+                                .mode
+                                .ok_or_else(|| "Folder permissions are unavailable".to_owned())
+                        });
+                    let _ = input.send(AppMsg::PermissionsInspected {
+                        pane: target.pane,
+                        path: target.path,
+                        result,
+                    });
+                }) {
+                Ok(worker) => self.aux_workers.push(worker),
+                Err(error) => {
+                    self.pane_mut(self.active_pane).error =
+                        Some(format!("Could not inspect folder permissions: {error}"))
+                }
+            }
+            return None;
+        }
         if let Some(path) = self.focused_path(self.active_pane) {
             let mode = self
                 .preview_state
@@ -192,7 +234,7 @@ impl AppModel {
             self.pane_mut(self.active_pane).error =
                 Some("Select one or more items to archive".to_owned());
         } else {
-            show_create_archive_dialog(sender);
+            show_create_archive_dialog(self.folder_action_input(sender));
         }
         None
     }
@@ -244,12 +286,7 @@ impl AppModel {
     }
 
     pub(super) fn on_settings(&mut self, sender: &ComponentSender<Self>) -> Option<AppMsg> {
-        show_settings_dialog(
-            self.appearance,
-            self.color_theme,
-            self.parallel_transfers,
-            sender,
-        );
+        settings::show(self, sender);
         None
     }
 
@@ -266,6 +303,34 @@ impl AppModel {
             self.palette_open = false;
             self.palette_query.clear();
             self.palette_selection = 0;
+        }
+        let target = self.folder_action_target.as_ref().map_or_else(
+            || self.pane(self.active_pane).current_directory(),
+            |target| &target.path,
+        );
+        if self.is_archive_browse_path(target)
+            && matches!(
+                command,
+                CommandId::Rename
+                    | CommandId::BatchRename
+                    | CommandId::Cut
+                    | CommandId::Move
+                    | CommandId::Trash
+                    | CommandId::DeletePermanent
+                    | CommandId::SecureDelete
+                    | CommandId::Permissions
+                    | CommandId::ConvertImage
+                    | CommandId::PdfTools
+                    | CommandId::NewFile
+                    | CommandId::NewDirectory
+                    | CommandId::Paste
+                    | CommandId::CreateArchive
+                    | CommandId::EditFile
+            )
+        {
+            self.pane_mut(self.active_pane).error =
+                Some("Archive browsing is read-only; use More → Edit archive contents to add, replace or remove entries".to_owned());
+            return;
         }
         let message = match command {
             CommandId::SwitchPane => Some(AppMsg::SwitchPane),
@@ -387,6 +452,10 @@ impl AppModel {
                 None
             }
             CommandId::DeletePermanent => self.on_delete_permanent(sender),
+            CommandId::SecureDelete => {
+                self.review_secure_delete(sender);
+                None
+            }
             CommandId::Undo => {
                 self.start_history(HistoryDirection::Undo, sender);
                 None
@@ -404,6 +473,18 @@ impl AppModel {
             }
             CommandId::Permissions => self.on_permissions(sender),
             CommandId::CreateArchive => self.on_create_archive(sender),
+            CommandId::BrowseArchive => {
+                if let Some((path, kind)) = self.focused_item(self.active_pane)
+                    && kind != EntryKind::Directory
+                    && is_archive_path(&path)
+                {
+                    self.start_archive_browse(self.active_pane, path, sender);
+                } else {
+                    self.pane_mut(self.active_pane).error =
+                        Some("Select a ZIP, 7Z, TAR, TAR.GZ or TGZ archive to browse".to_owned());
+                }
+                None
+            }
             CommandId::ExtractArchive => {
                 self.start_extract_archive(sender);
                 None
@@ -421,7 +502,12 @@ impl AppModel {
                 None
             }
             CommandId::ConnectRemote => {
-                show_remote_dialog(self.remote_uris.clone(), None, sender);
+                show_remote_dialog(
+                    self.remote_uris.clone(),
+                    self.remote_names.clone(),
+                    None,
+                    sender,
+                );
                 None
             }
             CommandId::Settings => self.on_settings(sender),
@@ -457,9 +543,64 @@ impl AppModel {
                 self.set_focused_tag(None);
                 None
             }
+            CommandId::FindDuplicates => {
+                power_tools::duplicates(
+                    Arc::clone(&self.vfs),
+                    self.pane(self.active_pane).current_directory().clone(),
+                    sender.input_sender().clone(),
+                );
+                None
+            }
+            CommandId::CompareFiles => {
+                let selected = self.operation_sources(self.active_pane);
+                let other = self
+                    .focused_item(self.active_pane.other())
+                    .map(|(path, _)| path);
+                let pair = if selected.len() == 2 {
+                    Some((selected[0].clone(), selected[1].clone()))
+                } else {
+                    selected.first().cloned().zip(other)
+                };
+                if let Some((left, right)) = pair {
+                    power_tools::compare(Arc::clone(&self.vfs), left, right);
+                } else {
+                    self.pane_mut(self.active_pane).error =
+                        Some("Select two files, or focus one file in each panel".into());
+                }
+                None
+            }
+            CommandId::EditArchive => {
+                let source = self
+                    .archive_mounts
+                    .source_for(self.pane(self.active_pane).current_directory())
+                    .or_else(|| {
+                        self.focused_item(self.active_pane)
+                            .filter(|(path, kind)| {
+                                *kind == EntryKind::File && is_archive_path(path)
+                            })
+                            .map(|(path, _)| path)
+                    });
+                if let Some(path) = source {
+                    if self.is_archive_browse_path(&path) {
+                        self.pane_mut(self.active_pane).error =
+                            Some("Copy this nested archive out before editing it.".into());
+                    } else {
+                        archive_editor::show(path, sender.input_sender().clone());
+                    }
+                } else {
+                    self.pane_mut(self.active_pane).error = Some(
+                        "Select or browse a ZIP, 7Z, TAR, TAR.GZ or TGZ archive to edit".into(),
+                    );
+                }
+                None
+            }
             CommandId::CompareDirectories => self.on_compare_directories(sender),
         };
         if let Some(message) = message {
+            let message = match &self.folder_action_target {
+                Some(target) => target.message(message),
+                None => message,
+            };
             let _ = sender.input_sender().send(message);
         }
     }

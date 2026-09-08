@@ -2,10 +2,15 @@
 
 use super::*;
 
+mod collapse;
+pub(super) mod menus;
+pub(super) use collapse::{CollapsibleGroup, favorite_group_key};
+
 /// The sidebar's widgets, plus the fixed rows that can light up as the current location.
 pub(super) struct SidebarWidgets {
     pub(super) revealer: gtk::Revealer,
     pub(super) focus_target: gtk::Button,
+    pub(super) groups: Vec<CollapsibleGroup>,
     pub(super) bookmarks: gtk::Box,
     pub(super) recent: gtk::Box,
     pub(super) workspaces: gtk::Box,
@@ -18,6 +23,7 @@ pub(super) fn build_sidebar(
     window: &adw::ApplicationWindow,
     sender: &ComponentSender<AppModel>,
     file_drag_ui: Rc<FileDragUiState>,
+    collapsed: &BTreeSet<String>,
 ) -> SidebarWidgets {
     let revealer = gtk::Revealer::new();
     revealer.set_transition_type(gtk::RevealerTransitionType::SlideRight);
@@ -39,10 +45,19 @@ pub(super) fn build_sidebar(
     body.add_css_class("sidebar-scroll-content");
 
     let mut places = Vec::new();
-    body.append(&sidebar_heading("Places"));
+    let mut groups = Vec::new();
+    let place_group = sidebar_section("places", "Places", None, collapsed, sender);
+    place_group.append_to(&body);
     let home = sidebar_button("Home", "commander-house-symbolic");
     let home_destination = home_path();
     home.set_tooltip_text(Some(&home_destination.to_string()));
+    menus::location(
+        &home,
+        "Home",
+        &home_destination,
+        true,
+        sender.input_sender(),
+    );
     places.push((home_destination.clone(), home.clone()));
     let mut place_paths = BTreeSet::from([home_destination.clone()]);
     {
@@ -55,7 +70,7 @@ pub(super) fn build_sidebar(
     install_file_drop_target(&home, sender, Rc::clone(&file_drag_ui), move |_| {
         Some(home_destination.clone())
     });
-    body.append(&home);
+    place_group.content.append(&home);
 
     for (label, icon, directory) in [
         (
@@ -98,6 +113,7 @@ pub(super) fn build_sidebar(
         }
         let button = sidebar_button(label, icon);
         button.set_tooltip_text(Some(&destination.to_string()));
+        menus::location(&button, label, &destination, true, sender.input_sender());
         places.push((destination.clone(), button.clone()));
         {
             let input = sender.input_sender().clone();
@@ -109,19 +125,23 @@ pub(super) fn build_sidebar(
         install_file_drop_target(&button, sender, Rc::clone(&file_drag_ui), move |_| {
             Some(destination.clone())
         });
-        body.append(&button);
+        place_group.content.append(&button);
     }
 
-    body.append(&sidebar_section(
+    let focus_target = place_group.toggle.clone().upcast();
+    groups.push(place_group);
+    let favorite_group = sidebar_section(
+        "favorites",
         "Favorites",
         Some((
             "commander-plus-symbolic",
             "Add the current location to favorites",
             CommandId::Bookmark,
         )),
+        collapsed,
         sender,
-    ));
-    let bookmarks = gtk::Box::new(gtk::Orientation::Vertical, 2);
+    );
+    let bookmarks = favorite_group.content.clone();
     let favorite_drop = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
     {
         let input = sender.input_sender().clone();
@@ -140,40 +160,52 @@ pub(super) fn build_sidebar(
         });
     }
     bookmarks.add_controller(favorite_drop);
-    body.append(&bookmarks);
+    favorite_group.append_to(&body);
+    groups.push(favorite_group);
 
     // Permanent locations rank above history: drives and servers, then Recent and Workspaces.
     let devices = devices::DeviceSidebar::new(sender);
-    body.append(&devices.devices);
+    let device_group = sidebar_section("devices", "Devices", None, collapsed, sender);
+    device_group.content.append(&devices.devices);
+    device_group.append_to(&body);
+    groups.push(device_group);
 
-    body.append(&sidebar_section(
+    let remote_group = sidebar_section(
+        "remotes",
         "Remote Storage",
         Some((
             "commander-plus-symbolic",
             "Connect to a server",
             CommandId::ConnectRemote,
         )),
+        collapsed,
         sender,
-    ));
+    );
     let remotes = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    body.append(&remotes);
-    body.append(&devices.mounts);
+    remote_group.content.append(&remotes);
+    remote_group.content.append(&devices.mounts);
+    remote_group.append_to(&body);
+    groups.push(remote_group);
 
-    body.append(&sidebar_section(
+    let workspace_group = sidebar_section(
+        "workspaces",
         "Workspaces",
         Some((
             "commander-plus-symbolic",
             "Save the current setup as a workspace",
             CommandId::SaveWorkspace,
         )),
+        collapsed,
         sender,
-    ));
-    let workspaces = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    body.append(&workspaces);
+    );
+    let workspaces = workspace_group.content.clone();
+    workspace_group.append_to(&body);
+    groups.push(workspace_group);
 
-    body.append(&sidebar_heading("Recent"));
-    let recent = gtk::Box::new(gtk::Orientation::Vertical, 2);
-    body.append(&recent);
+    let recent_group = sidebar_section("recent", "Recent", None, collapsed, sender);
+    let recent = recent_group.content.clone();
+    recent_group.append_to(&body);
+    groups.push(recent_group);
 
     let scrolled = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -192,6 +224,13 @@ pub(super) fn build_sidebar(
     let trash_destination = local_trash_path();
     let trash = sidebar_button("Trash", "commander-trash-symbolic");
     trash.set_tooltip_text(Some("Open the local trash contents"));
+    menus::location(
+        &trash,
+        "Trash",
+        &trash_destination,
+        false,
+        sender.input_sender(),
+    );
     places.push((trash_destination.clone(), trash.clone()));
     {
         let input = sender.input_sender().clone();
@@ -205,7 +244,8 @@ pub(super) fn build_sidebar(
     revealer.set_child(Some(&sidebar));
     SidebarWidgets {
         revealer,
-        focus_target: home,
+        focus_target,
+        groups,
         bookmarks,
         recent,
         workspaces,
@@ -217,30 +257,26 @@ pub(super) fn build_sidebar(
 
 /// A section heading with an optional always-visible action on its trailing edge.
 pub(super) fn sidebar_section(
+    key: &str,
     label: &str,
     action: Option<(&str, &str, CommandId)>,
+    collapsed: &BTreeSet<String>,
     sender: &ComponentSender<AppModel>,
-) -> gtk::Box {
-    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    row.add_css_class("sidebar-heading-row");
-    let heading = sidebar_heading(label);
-    heading.set_hexpand(true);
-    row.append(&heading);
+) -> CollapsibleGroup {
+    let group = CollapsibleGroup::new(key, label, !collapsed.contains(key), sender.input_sender());
     if let Some((icon, tooltip, command)) = action {
         let button = icon_button(icon, tooltip);
         button.add_css_class("flat");
         button.add_css_class("sidebar-heading-action");
-        connect_button(&button, sender, move || AppMsg::ExecuteCommand(command));
-        row.append(&button);
+        let toggle = group.toggle.clone();
+        let input = sender.input_sender().clone();
+        button.connect_clicked(move |_| {
+            toggle.set_active(true);
+            let _ = input.send(AppMsg::ExecuteCommand(command));
+        });
+        group.heading.append(&button);
     }
-    row
-}
-
-pub(super) fn sidebar_heading(label: &str) -> gtk::Label {
-    let heading = gtk::Label::new(Some(label));
-    heading.add_css_class("sidebar-heading");
-    heading.set_xalign(0.0);
-    heading
+    group
 }
 
 pub(super) fn sidebar_button(label: &str, icon: &str) -> gtk::Button {
@@ -272,11 +308,11 @@ pub(super) fn window_controls(window: &adw::ApplicationWindow) -> gtk::Box {
     let controls = gtk::Box::new(gtk::Orientation::Horizontal, 2);
     controls.add_css_class("window-controls");
     controls.set_valign(gtk::Align::Center);
-    let close = gtk::Button::from_icon_name("commander-x-symbolic");
+    let close = chrome::close_button();
+    controls.append(&close);
     let minimize = gtk::Button::from_icon_name("commander-minus-symbolic");
     let maximize = gtk::Button::from_icon_name("commander-square-symbolic");
     for (button, class, tooltip) in [
-        (&close, "window-close", "Close"),
         (&minimize, "window-minimize", "Minimize"),
         (&maximize, "window-maximize", "Maximize"),
     ] {

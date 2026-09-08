@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -139,9 +139,37 @@ pub struct CustomToolSession {
     pub enabled: bool,
 }
 
-/// Persisted window and pane session.
+/// Global workflow choices, with backwards-compatible defaults for existing sessions.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(default)]
+pub struct WorkflowPreferences {
+    pub restore_tabs: bool,
+    pub browse_archives: bool,
+    pub directories_first: bool,
+    pub inspector_folder_sizes: bool,
+    pub inspector_git: bool,
+    pub remember_recent: bool,
+    pub recent_limit: u32,
+}
+
+impl Default for WorkflowPreferences {
+    fn default() -> Self {
+        Self {
+            restore_tabs: true,
+            browse_archives: true,
+            directories_first: true,
+            inspector_folder_sizes: true,
+            inspector_git: true,
+            remember_recent: true,
+            recent_limit: 12,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SessionState {
+    #[serde(default)]
+    pub workflow: WorkflowPreferences,
     #[serde(default)]
     pub vertical_split: bool,
     #[serde(default = "default_dual_pane")]
@@ -156,6 +184,8 @@ pub struct SessionState {
     pub keymap_profile: KeymapProfile,
     #[serde(default = "default_sidebar_visible")]
     pub sidebar_visible: bool,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub collapsed_sidebar_groups: BTreeSet<String>,
     #[serde(default = "default_preview_visible")]
     pub preview_visible: bool,
     #[serde(default = "default_preview_width")]
@@ -176,6 +206,8 @@ pub struct SessionState {
     pub workspaces: Vec<WorkspaceSession>,
     #[serde(default)]
     pub remote_uris: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub remote_names: BTreeMap<String, String>,
     #[serde(default)]
     pub appearance: AppearanceMode,
     #[serde(default)]
@@ -191,6 +223,7 @@ pub struct SessionState {
 impl Default for SessionState {
     fn default() -> Self {
         Self {
+            workflow: WorkflowPreferences::default(),
             vertical_split: false,
             dual_pane: true,
             split_position: 600,
@@ -198,6 +231,7 @@ impl Default for SessionState {
             right: PaneSession::default(),
             keymap_profile: KeymapProfile::default(),
             sidebar_visible: true,
+            collapsed_sidebar_groups: BTreeSet::new(),
             preview_visible: true,
             preview_width: default_preview_width(),
             bookmarks: Vec::new(),
@@ -208,6 +242,7 @@ impl Default for SessionState {
             window_height: default_window_height(),
             workspaces: Vec::new(),
             remote_uris: Vec::new(),
+            remote_names: BTreeMap::new(),
             appearance: AppearanceMode::default(),
             color_theme: ColorTheme::default(),
             parallel_transfers: default_parallel_transfers(),
@@ -314,6 +349,20 @@ impl SessionWorker {
     pub fn save(&self, state: SessionState) {
         let _ = self.sender.send(SessionCommand::Save(Box::new(state)));
     }
+
+    pub fn save_keymap(
+        &self,
+        overrides: KeymapOverrides,
+        reply: impl FnOnce(Result<(), String>) + Send + 'static,
+    ) {
+        if let Err(error) = self
+            .sender
+            .send(SessionCommand::Keymap(overrides, Box::new(reply)))
+            && let SessionCommand::Keymap(_, reply) = error.0
+        {
+            reply(Err("The settings worker has stopped".to_owned()));
+        }
+    }
 }
 
 impl Drop for SessionWorker {
@@ -346,6 +395,7 @@ impl HistoryWriter {
 }
 
 enum SessionCommand {
+    Keymap(KeymapOverrides, Box<dyn FnOnce(Result<(), String>) + Send>),
     History(
         Box<crate::history_store::HistoryState>,
         Option<mpsc::SyncSender<Result<(), String>>>,
@@ -376,6 +426,17 @@ fn session_loop(
 
     while let Ok(command) = receiver.recv() {
         match command {
+            SessionCommand::Keymap(overrides, reply) => {
+                let result = keymap_path()
+                    .ok_or_else(|| "No configuration directory is available".to_owned())
+                    .and_then(|path| {
+                        let contents = toml_edit::ser::to_string_pretty(&overrides)
+                            .map_err(|error| error.to_string())?;
+                        crate::history_store::write_atomic(&path, contents.as_bytes())
+                            .map_err(|error| error.to_string())
+                    });
+                reply(result);
+            }
             SessionCommand::Save(state) => {
                 if let Some(path) = path.as_deref()
                     && let Err(error) = save_session(path, &state)
@@ -452,7 +513,7 @@ fn save_session(path: &Path, state: &SessionState) -> Result<(), Box<dyn std::er
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::{
         AppearanceMode, ColorTheme, CustomToolSession, FavoriteGroupSession, PaneSession,
@@ -462,6 +523,7 @@ mod tests {
     #[test]
     fn session_round_trips_through_toml_edit() {
         let state = SessionState {
+            workflow: super::WorkflowPreferences::default(),
             vertical_split: true,
             dual_pane: false,
             split_position: 420,
@@ -485,6 +547,10 @@ mod tests {
             },
             keymap_profile: Default::default(),
             sidebar_visible: true,
+            collapsed_sidebar_groups: BTreeSet::from([
+                "devices".to_owned(),
+                "favorite:Projects".to_owned(),
+            ]),
             preview_visible: true,
             preview_width: 412,
             bookmarks: vec!["/home".to_owned()],
@@ -520,6 +586,10 @@ mod tests {
                 preview_width: Some(340),
             }],
             remote_uris: vec!["sftp://example.com".to_owned()],
+            remote_names: BTreeMap::from([(
+                "sftp://example.com".to_owned(),
+                "Work server".to_owned(),
+            )]),
             appearance: AppearanceMode::System,
             color_theme: ColorTheme::Forest,
             parallel_transfers: false,
@@ -562,6 +632,7 @@ mod tests {
             r#"
                 vertical_split = false
                 split_position = 600
+                remote_uris = ["sftp://example.com"]
                 [left]
                 tabs = ["/tmp"]
                 active_tab = 0
@@ -573,6 +644,7 @@ mod tests {
         .expect("legacy session");
 
         assert!(decoded.sidebar_visible);
+        assert!(decoded.collapsed_sidebar_groups.is_empty());
         assert!(decoded.dual_pane);
         assert!(decoded.preview_visible);
         assert_eq!(decoded.preview_width, 340);
@@ -581,6 +653,8 @@ mod tests {
         assert_eq!(decoded.window_width, 1_520);
         assert_eq!(decoded.window_height, 900);
         assert!(decoded.workspaces.is_empty());
+        assert_eq!(decoded.remote_uris, ["sftp://example.com"]);
+        assert!(decoded.remote_names.is_empty());
         assert_eq!(decoded.appearance, AppearanceMode::Dark);
         assert!(decoded.tags.is_empty());
         assert_eq!(decoded.keymap_profile, Default::default());

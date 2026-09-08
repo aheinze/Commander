@@ -108,14 +108,6 @@ impl AppModel {
             ),
         );
         let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        for error in &self.recovery_errors {
-            let label = gtk::Label::new(Some(error));
-            label.set_wrap(true);
-            label.set_selectable(true);
-            label.set_width_chars(48);
-            label.set_xalign(0.0);
-            content.append(&label);
-        }
         if self.recovery_records.is_empty() {
             content.append(&gtk::Label::new(Some("No saved file operations yet.")));
         }
@@ -181,6 +173,9 @@ impl AppModel {
         heading.add_response("close", "Close");
         heading.set_close_response("close");
         heading.present(relm4::main_application().active_window().as_ref());
+        if !self.recovery_errors.is_empty() {
+            notifications::error(&self.recovery_errors.join("\n"));
+        }
     }
 
     pub(super) fn restore_missing_originals(

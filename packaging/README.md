@@ -10,6 +10,7 @@ publish them or sign them.
 ## Requirements
 
 - Python 3.11+, Rust 1.96+, a C compiler/linker, `pkg-config`, and GNU `readelf`.
+  Publishing signed update metadata also requires OpenSSL 3.
 - GTK 4.14+, libadwaita 1.5+, and GLib 2.80+ development packages.
 - [nFPM](https://nfpm.goreleaser.com/install/) in `PATH` for deb, rpm, and Arch
   packages. Native `dpkg-deb`, `rpmbuild`, and `makepkg` are not required.
@@ -78,14 +79,15 @@ provenance. Verify downloads with `sha256sum -c SHA256SUMS` in the release direc
 Packaging regression checks (no packaging tools or Cargo build required):
 
 ```sh
-python3 -B -m unittest discover -s packaging -p 'test_release.py'
+python3 -B -m unittest discover -s packaging -p 'test_*.py'
 ```
 
 ## Automatic GitHub releases
 
 The `.github/workflows/release.yml` workflow builds all four formats for x86_64
 and ARM64 on Ubuntu 24.04, then attaches the eight packages, two architecture
-manifests, and a combined `SHA256SUMS` file to a GitHub Release.
+manifests, a signed `update.json` with its `update.json.sig`, and a combined
+`SHA256SUMS` file to a GitHub Release.
 
 Version-tag pushes (`v*`) start the Release workflow only. Ordinary branch pushes
 and pull requests do not start workflows. The separate CI suite remains available
@@ -96,6 +98,11 @@ One-time setup: in the repository's **Settings → Secrets and variables → Act
 `Your Name <you@example.org>`. GitHub's built-in `GITHUB_TOKEN` handles publication;
 no personal access token is needed. Repository or organization policies must allow
 the publishing job's `contents: write` permission.
+
+Configure the [update signing key](#update-signing-key) before the first release
+using the updater. Release builds embed its public key; publication requires the
+matching private key. Unsigned releases remain accessible through GitHub, but the
+app does not offer their assets as verified downloads.
 
 Commit the workflow, packaging files, and application changes before creating a
 tag. Set the workspace version in `Cargo.toml`, keep `Cargo.lock` in sync, then
@@ -125,3 +132,64 @@ The [release checks](../docs/RELEASE_CHECKS.md#clean-native-package-lifecycle)
 document how to run the container package checks locally. Full desktop-session
 testing and other Linux distributions remain separate. Update the two tool hashes
 for both architectures together when changing a packaging tool version in the workflow.
+
+## Update signing key
+
+Generate an Ed25519 key outside the checkout and keep a secure backup. OpenSSL 3
+is used only by release tooling; the application verifies signatures in Rust.
+
+```sh
+umask 077
+mkdir -p "$HOME/.config/commander-release"
+openssl genpkey -algorithm Ed25519 -out "$HOME/.config/commander-release/private.pem"
+python3 packaging/update_manifest.py public-key "$HOME/.config/commander-release/private.pem"
+```
+
+In the repository's **Settings → Secrets and variables → Actions**, set:
+
+- Variable `COMMANDER_UPDATE_PUBLIC_KEY`: the 64-character hexadecimal public key
+  printed by the command.
+- Secret `COMMANDER_UPDATE_PRIVATE_KEY`: the complete PEM contents of `private.pem`.
+  Keep this private key out of source control and release assets.
+
+The public key is passed to both architecture builds. The private key is available
+only to the publishing job's signing step, which confirms the two keys match,
+rechecks all eight package hashes and sizes, and signs the exact manifest bytes.
+The signature is a raw 64-byte Ed25519 signature. `SHA256SUMS` includes both new
+metadata files. No production key is generated or configured by the workflow.
+
+Enable [immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
+in GitHub repository settings. The workflow already uploads to a draft before
+publishing. Release changes require a new version tag, including packaging fixes.
+Keep the signing key stable: changing the repository variable alone will prevent
+older clients from trusting new releases. Key rotation needs an explicit transition
+release or a manual reinstall; automatic key rotation is not implemented.
+
+For a local build with verified downloads enabled, export the same public key as
+`COMMANDER_UPDATE_PUBLIC_KEY` before running Cargo. Builds without it can check
+versions and show release notes, but direct verified downloads remain unavailable.
+
+## In-app update behavior
+
+Settings → About offers manual stable-release checks, release notes, a link to the
+release, and downloads for compatible architectures and glibc versions. Discovery
+uses GitHub's public API without a token, with ETag caching and rate-limit backoff.
+Checks are throttled to once per minute. API errors never report “up to date.”
+
+Downloads stream over HTTPS to a temporary file in the chosen local directory.
+Commander checks the signed size and SHA-256 before publishing the file, refuses
+to overwrite existing files, and removes partial files on handled failures or
+cancellation. Verified AppImages are saved executable for the current user;
+other packages remain private, non-executable files. Closing Settings cancels pending work; cancellation is checked
+between network reads, which can remain blocked until the request times out
+(30 seconds for metadata, 10 minutes for a package). Abrupt termination can leave
+a hidden `.commander-download-*` temporary file; it is never offered as a verified
+download. These files can be removed manually after Commander exits.
+
+The app recognizes AppImage context and package-manager ownership to suggest a
+format. Native packages still need the matching system libraries; the package
+manager resolves these dependencies during installation. Source/unknown builds
+offer compatible formats for manual installation. Distribution-managed users
+should prefer their distribution's updater. No package manager, installer, shell,
+or downloaded executable is launched automatically. Daily checks, prerelease
+channels, AppImage replacement, restart, and rollback are later increments.

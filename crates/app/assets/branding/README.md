@@ -1,12 +1,16 @@
 # Commander app icon
 
-`commander.svg` is the current, original vector artwork: a slate-blue folder with
-two panels representing dual-pane browsing. Its transparent 128 × 128 canvas
-includes the padding used by desktop launchers. Keep that padding when exporting.
+`commander.svg` is the editable vector master of the user's chosen mark: three
+left-aligned black capsules, with matching long top and bottom bars and a short
+middle bar. The bars preserve the supplied mark's proportions and spacing. A
+white rounded-square background keeps the black mark visible in both themes.
 
-The SVG is embedded in the app and installed into the scalable hicolor icon theme
-by Linux packages. `packaging/org.example.Dualpane.png` is its 512 × 512 export,
-used by AppImage and launchers that require a raster icon. Regenerate that PNG
-from the SVG when changing the artwork.
+`commander-mark-source.png` preserves the user's original image unchanged.
+`commander-icon.png` is a 1024 × 1024 raster export of the vector master.
+`packaging/org.example.Dualpane.png` is the 512 × 512 launcher export used by
+AppImage and other raster consumers. Run `python3 scripts/export-app-icon.py`
+from the repository to regenerate both assets (requires ImageMagick).
 
-The older `commander-logo*.png` files are previous concepts.
+The older `commander-logo*.png` files and `commander-icon.prompt.md` describe
+previous concepts. The current icon is drawn directly from the supplied mark;
+it does not use generated artwork.

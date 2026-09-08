@@ -37,8 +37,16 @@ impl SimpleComponent for AppModel {
         let home = home_path();
         let left_fallback = init.options.left.clone().unwrap_or_else(|| home.clone());
         let right_fallback = init.options.right.clone().unwrap_or_else(|| home.clone());
-        let left_session = overridden_session(&saved.left, init.options.left.as_ref());
-        let right_session = overridden_session(&saved.right, init.options.right.as_ref());
+        let left_session = settings::startup_pane(
+            &saved.left,
+            saved.workflow.restore_tabs,
+            init.options.left.as_ref(),
+        );
+        let right_session = settings::startup_pane(
+            &saved.right,
+            saved.workflow.restore_tabs,
+            init.options.right.as_ref(),
+        );
         let vfs: Arc<dyn Vfs> = Arc::new(LocalFs);
         let operation_engine = OperationEngine::new(Arc::clone(&vfs))
             .with_journal_directory(recovery::journal_directory());
@@ -69,6 +77,7 @@ impl SimpleComponent for AppModel {
                 }
             };
         let mut model = AppModel {
+            folder_action_target: None,
             devices: devices::DeviceState::new(),
             panes: [
                 PaneState::from_session(&left_session, left_fallback),
@@ -80,6 +89,7 @@ impl SimpleComponent for AppModel {
             split_position: saved.split_position.max(120),
             keymap: Keymap::new(saved.keymap_profile, init.keymap_overrides),
             sidebar_visible: saved.sidebar_visible,
+            collapsed_sidebar_groups: saved.collapsed_sidebar_groups.clone(),
             preview_visible: saved.preview_visible && !compact_layout,
             preview_width: saved
                 .preview_width
@@ -114,9 +124,20 @@ impl SimpleComponent for AppModel {
                         .map(|connection| connection.uri)
                 })
                 .collect(),
+            remote_names: saved
+                .remote_names
+                .iter()
+                .filter(|(uri, name)| saved.remote_uris.contains(uri) && !name.trim().is_empty())
+                .filter_map(|(uri, name)| {
+                    remote::RemoteConnection::parse(uri)
+                        .ok()
+                        .map(|connection| (connection.uri, name.trim().to_owned()))
+                })
+                .collect(),
             appearance: saved.appearance,
             color_theme: saved.color_theme,
             parallel_transfers: saved.parallel_transfers,
+            workflow: saved.workflow.clone(),
             custom_tools: saved.custom_tools.clone(),
             custom_tools_revision: 0,
             tags: saved.tags.clone(),
@@ -151,7 +172,7 @@ impl SimpleComponent for AppModel {
             search_results: SearchResults::default(),
             search_error: None,
             tool_cancel: None,
-            archive_mounts: Vec::new(),
+            archive_mounts: archive_browser::ArchiveLocations::default(),
             terminal_visible: false,
             terminal_tabs: Vec::new(),
             active_terminal: None,
@@ -184,6 +205,14 @@ impl SimpleComponent for AppModel {
             aux_workers: Vec::new(),
             live_updates: model_watch::LiveUpdates::default(),
         };
+        for pane in &mut model.panes {
+            pane.sort.directories_first = model.workflow.directories_first;
+        }
+        if !model.workflow.remember_recent {
+            model.recent.clear();
+        }
+        model.workflow.recent_limit = model.workflow.recent_limit.clamp(5, 100);
+        model.recent.truncate(model.workflow.recent_limit as usize);
         model.panes[PaneId::Left.index()].focus_files_epoch = 1;
         model.refresh_grid_column_estimates();
 
@@ -217,6 +246,7 @@ impl SimpleComponent for AppModel {
         palette_entry.set_hexpand(true);
         palette_entry.set_placeholder_text(Some("Search commands…"));
         palette_header.append(&palette_entry);
+        palette_header.append(&chrome::dialog_close_button(&palette_dialog));
         palette_box.append(&palette_header);
         let palette_scroll = gtk::ScrolledWindow::builder()
             .vexpand(true)
@@ -363,13 +393,19 @@ impl SimpleComponent for AppModel {
         let SidebarWidgets {
             revealer: sidebar_revealer,
             focus_target: sidebar_focus_target,
+            groups: sidebar_groups,
             bookmarks: sidebar_bookmarks,
             recent: sidebar_recent,
             workspaces: sidebar_workspaces,
             remotes: sidebar_remotes,
             devices: sidebar_devices,
             places: sidebar_places,
-        } = build_sidebar(&window, &sender, Rc::clone(&file_drag_ui));
+        } = build_sidebar(
+            &window,
+            &sender,
+            Rc::clone(&file_drag_ui),
+            &model.collapsed_sidebar_groups,
+        );
         let preview = PreviewWidgets::new(&sender);
         let quick_look = QuickLookWidgets::new(&window, &sender);
         let search = SearchWidgets::new(&window, &sender);
@@ -391,7 +427,7 @@ impl SimpleComponent for AppModel {
         main_box.append(&jobs.root);
         app_shell.append(&sidebar_revealer);
         app_shell.append(&main_box);
-        window.set_content(Some(&app_shell));
+        window.set_content(Some(&notifications::wrap(&app_shell)));
 
         let inner_panes = paned.clone();
         let initial_preview_visible = model.preview_visible;
@@ -557,6 +593,8 @@ impl SimpleComponent for AppModel {
             workspace_paned,
             sidebar_revealer,
             sidebar_focus_target,
+            sidebar_groups,
+            sidebar_favorite_groups: Vec::new(),
             sidebar_bookmarks,
             sidebar_recent,
             sidebar_workspaces,
@@ -565,6 +603,7 @@ impl SimpleComponent for AppModel {
             sidebar_places,
             sidebar_bookmark_rows: Vec::new(),
             sidebar_recent_rows: Vec::new(),
+            sidebar_remote_rows: Vec::new(),
             rendered_active_location: None,
             rendered_sidebar_visible: !model.sidebar_visible,
             rendered_focus_sidebar_epoch: 0,
@@ -575,6 +614,8 @@ impl SimpleComponent for AppModel {
             rendered_recent: vec!["\0".to_owned()],
             rendered_workspaces: vec!["\0".to_owned()],
             rendered_remotes: vec!["\0".to_owned()],
+            rendered_remote_names: BTreeMap::new(),
+            rendered_remote_devices: None,
             palette_dialog,
             palette_parent: window.clone(),
             palette_entry,
@@ -608,6 +649,8 @@ impl SimpleComponent for AppModel {
 
         model.start_listing(PaneId::Left, &sender);
         model.start_listing(PaneId::Right, &sender);
+        pane_git::install_refresh(&window, &sender);
+        model.sync_pane_git(&sender);
         model.start_preview(&sender);
         model.persist_session();
         model.scan_recovery(false, &sender);
@@ -618,6 +661,14 @@ impl SimpleComponent for AppModel {
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         self.reap_aux_workers();
         match message {
+            AppMsg::RefreshPaneGit => {
+                for pane in &mut self.panes {
+                    pane.git.invalidate();
+                }
+            }
+            AppMsg::PaneGitReady { pane, path, info } => {
+                self.on_pane_git_ready(pane, path, info);
+            }
             AppMsg::ShowRecovery => self.scan_recovery(true, &sender),
             AppMsg::RecoveryReady {
                 records,
@@ -629,22 +680,32 @@ impl SimpleComponent for AppModel {
                     .any(|record| record.state.is_none() && !record.reviewed);
                 self.recovery_records = records;
                 self.recovery_errors.extend(errors);
-                if show || interrupted || !self.recovery_errors.is_empty() {
+                if show || interrupted {
                     self.show_recovery(&sender);
+                } else if !self.recovery_errors.is_empty() {
+                    notifications::error(&self.recovery_errors.join("\n"));
                 }
             }
             AppMsg::RestoreMissingOriginals(path) => self.restore_missing_originals(path, &sender),
             AppMsg::ReviewRecovery(path) => self.review_recovery(path, &sender),
             AppMsg::RecoveryFinished(result) => {
+                match &result {
+                    Ok(message) => notifications::success(message),
+                    Err(error) => notifications::error(error),
+                }
                 let message = result.unwrap_or_else(|error| error);
                 self.push_operation_log(message.clone());
-                let dialog = AlertSheet::new(Some("Recovery result"), Some(&message));
-                dialog.add_response("close", "Close");
-                dialog.present(relm4::main_application().active_window().as_ref());
                 self.start_listing(PaneId::Left, &sender);
                 self.start_listing(PaneId::Right, &sender);
             }
             AppMsg::ExecuteCommand(command) => self.execute_command(command, &sender),
+            AppMsg::PermissionsInspected { pane, path, result } => match result {
+                Ok(mode) => show_permissions_dialog(path, mode, &sender),
+                Err(error) => self.pane_mut(pane).error = Some(error),
+            },
+            AppMsg::TabFolderAction { target, action } => {
+                self.on_tab_folder_action(target, *action, &sender);
+            }
             AppMsg::DevicesChanged => self.devices.refresh(),
             AppMsg::DeviceMountRemoved(root) => {
                 self.devices.refresh();
@@ -793,11 +854,9 @@ impl SimpleComponent for AppModel {
             AppMsg::ArchiveReady { id, pane, result } => {
                 self.on_archive_ready(id, pane, result, &sender)
             }
-            AppMsg::ArchiveBrowseReady {
-                pane,
-                source,
-                result,
-            } => self.on_archive_browse_ready(pane, source, result, &sender),
+            AppMsg::ArchiveBrowseReady { pane, id, result } => {
+                self.on_archive_browse_ready(pane, id, result, &sender)
+            }
             AppMsg::ConvertImage(format) => self.start_image_conversion(format, &sender),
             AppMsg::ImageConverted(result) => self.on_image_converted(result, &sender),
             AppMsg::RunPdfTool {
@@ -846,10 +905,20 @@ impl SimpleComponent for AppModel {
                 destination,
                 result,
             } => self.on_rename_finished(pane, source, destination, result, &sender),
+            AppMsg::ArchiveEdited(source) => self.on_archive_edited(source, &sender),
             AppMsg::BatchRename(items) => self.start_batch_rename(items, &sender),
             AppMsg::BatchRenameFinished(result) => self.on_batch_rename_finished(result, &sender),
             AppMsg::DeletePermanentConfirmed => {
                 self.start_operation(CommandId::DeletePermanent, &sender);
+            }
+            AppMsg::SecureDeleteConfirmed { pane, plan } => {
+                self.start_secure_delete(pane, plan, &sender)
+            }
+            AppMsg::SecureDeleteProgress { id, progress } => {
+                self.on_secure_delete_progress(id, progress)
+            }
+            AppMsg::SecureDeleteReady { id, pane, result } => {
+                self.on_secure_delete_ready(id, pane, result, &sender)
             }
             AppMsg::OpenFailed(pane, error) => self.pane_mut(pane).error = Some(error),
             AppMsg::LoadPreview { generation, path } => {
@@ -949,7 +1018,9 @@ impl SimpleComponent for AppModel {
                     && self.pane(pane).miller_columns.len() > 1
                 {
                     self.move_miller_left(pane, &sender);
-                } else if let Some(parent) = self.pane(pane).active().path.parent() {
+                } else if let Some(parent) =
+                    self.archive_mounts.parent(&self.pane(pane).active().path)
+                {
                     self.navigate_exact(pane, parent, &sender);
                 }
             }
@@ -1067,6 +1138,17 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::WindowSize(width, height) => self.on_window_size(width, height),
             AppMsg::SaveWorkspace(name) => self.on_save_workspace(name),
+            AppMsg::SidebarLocation { path, action } => {
+                self.sidebar_location(path, action, &sender)
+            }
+            AppMsg::RemoveRecent(path) => {
+                self.recent.retain(|saved| saved != &path);
+                self.persist_session();
+            }
+            AppMsg::ClearRecent => {
+                self.recent.clear();
+                self.persist_session();
+            }
             AppMsg::UpdateWorkspace(index) => self.on_update_workspace(index),
             AppMsg::RenameWorkspace { index, name } => self.on_rename_workspace(index, name),
             AppMsg::RemoveWorkspace(index) => {
@@ -1088,10 +1170,22 @@ impl SimpleComponent for AppModel {
             AppMsg::RenameFavorite { group, path, name } => {
                 self.on_rename_favorite(group, &path, &name)
             }
+            AppMsg::SetSidebarGroupExpanded { key, expanded } => {
+                let changed = if expanded {
+                    self.collapsed_sidebar_groups.remove(&key)
+                } else {
+                    self.collapsed_sidebar_groups.insert(key)
+                };
+                if changed {
+                    self.persist_session();
+                }
+            }
             AppMsg::CreateFavoriteGroup(name) => self.on_create_favorite_group(name),
             AppMsg::RemoveFavoriteGroup(index) => {
                 if index < self.favorite_groups.len() {
-                    self.favorite_groups.remove(index);
+                    let group = self.favorite_groups.remove(index);
+                    self.collapsed_sidebar_groups
+                        .remove(&sidebar::favorite_group_key(&group.name));
                     self.persist_session();
                 }
             }
@@ -1102,23 +1196,35 @@ impl SimpleComponent for AppModel {
                 self.on_remove_grouped_favorite(group, item)
             }
             AppMsg::ConnectRemote(uri) => self.on_connect_remote(uri, &sender),
-            AppMsg::RemoveRemote(index) => {
-                if index < self.remote_uris.len() {
-                    self.remote_uris.remove(index);
-                    self.persist_session();
-                }
+            AppMsg::RemoveRemote(uri) => {
+                self.remote_uris.retain(|saved| saved != &uri);
+                self.remote_names.remove(&uri);
+                self.persist_session();
+            }
+            AppMsg::SaveRemote {
+                uri,
+                replacing,
+                name,
+            } => {
+                self.save_remote(&uri, Some(&replacing), Some(&name));
             }
             AppMsg::RemoteConnected { uri, result } => {
                 self.on_remote_connected(uri, result, &sender)
             }
             AppMsg::EditRemote(uri) => {
-                show_remote_dialog(self.remote_uris.clone(), Some(uri), &sender);
+                show_remote_dialog(
+                    self.remote_uris.clone(),
+                    self.remote_names.clone(),
+                    Some(uri),
+                    &sender,
+                );
             }
             AppMsg::ConnectRemoteWithOptions {
                 connection,
                 replacing,
+                name,
             } => {
-                self.on_connect_remote_with_options(connection, replacing, &sender);
+                self.on_connect_remote_with_options(connection, replacing, name, &sender);
             }
             AppMsg::ForgetRemotePassword(uri) => {
                 let input = sender.input_sender().clone();
@@ -1142,11 +1248,10 @@ impl SimpleComponent for AppModel {
                 }
                 Err(error) => self.pane_mut(self.active_pane).error = Some(error),
             },
-            AppMsg::SetSettings {
-                appearance,
-                color_theme,
-                parallel_transfers,
-            } => self.on_set_settings(appearance, color_theme, parallel_transfers),
+            AppMsg::SetSettings(settings) => self.on_set_settings(*settings, &sender),
+            AppMsg::SettingsSaveFailed(error) => {
+                notifications::error(&format!("Could not save keyboard shortcuts: {error}"));
+            }
             AppMsg::ManageCustomTools => {
                 dialogs::show_custom_tools_dialog(self.custom_tools.clone(), &sender);
             }
@@ -1271,12 +1376,39 @@ impl SimpleComponent for AppModel {
         }
         self.sync_directory_watches(&sender);
         self.flush_filesystem_changes(&sender);
+        self.sync_pane_git(&sender);
         for pane in [PaneId::Left, PaneId::Right] {
             self.sync_selection_size(pane, &sender);
         }
     }
 
     fn update_view(&self, widgets: &mut Self::Widgets, sender: ComponentSender<Self>) {
+        for pane in [PaneId::Left, PaneId::Right] {
+            let state = self.pane(pane);
+            notifications::observe(
+                format!("pane-{pane:?}"),
+                state.error.as_deref(),
+                notifications::Kind::Error,
+            );
+            for (index, column) in state.miller_columns.iter().enumerate() {
+                notifications::observe(
+                    format!("column-{pane:?}-{index}"),
+                    column.error.as_deref(),
+                    notifications::Kind::Error,
+                );
+            }
+        }
+        for (id, operation) in &self.operations {
+            notifications::observe(
+                format!("operation-{id:?}"),
+                operation.error.as_deref(),
+                if operation.state == JobState::Cancelled {
+                    notifications::Kind::Info
+                } else {
+                    notifications::Kind::Error
+                },
+            );
+        }
         let reserved_width = i32::from(self.sidebar_visible) * SIDEBAR_WIDTH
             + i32::from(self.preview_visible) * self.preview_width;
         let available_pane_width = self.window_width.saturating_sub(reserved_width);
@@ -1386,18 +1518,33 @@ impl SimpleComponent for AppModel {
             &self.bookmarks,
             &self.bookmark_labels,
             &self.favorite_groups,
+            &self.collapsed_sidebar_groups,
             &sender,
         );
         widgets.render_sidebar_recent(&self.recent, &sender);
         widgets.render_sidebar_workspaces(&self.workspaces, &sender);
-        widgets.render_sidebar_remotes(&self.remote_uris, &sender);
-        if widgets
-            .sidebar_devices
-            .render(&self.devices, &sender, &widgets.file_drag_ui)
-        {
+        widgets.render_sidebar_remotes(
+            &self.remote_uris,
+            &self.remote_names,
+            &self.devices,
+            &sender,
+        );
+        if widgets.sidebar_devices.render(
+            &self.devices,
+            &self.remote_uris,
+            &sender,
+            &widgets.file_drag_ui,
+        ) {
             widgets.rendered_active_location = None;
         }
         widgets.render_sidebar_active(self.pane(self.active_pane).current_directory());
+        for group in widgets
+            .sidebar_groups
+            .iter()
+            .chain(&widgets.sidebar_favorite_groups)
+        {
+            group.set_expanded(!self.collapsed_sidebar_groups.contains(&group.key));
+        }
         if widgets.rendered_focus_sidebar_epoch != self.focus_sidebar_epoch {
             widgets.rendered_focus_sidebar_epoch = self.focus_sidebar_epoch;
             let target = widgets.sidebar_focus_target.clone();
@@ -1441,6 +1588,7 @@ impl SimpleComponent for AppModel {
             self.active_pane == PaneId::Left,
             self.started,
             self.tags_revision,
+            &self.archive_mounts,
             &sender,
         );
         widgets.panes[1].render(
@@ -1448,6 +1596,7 @@ impl SimpleComponent for AppModel {
             self.active_pane == PaneId::Right,
             self.started,
             self.tags_revision,
+            &self.archive_mounts,
             &sender,
         );
         widgets.preview.render(self, &sender);

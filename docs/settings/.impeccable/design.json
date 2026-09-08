@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-08T11:41:04Z",
+  "title": "Design System: Commander Settings",
+  "extensions": {
+    "motion": [
+      {
+        "name": "utility-footer-hover",
+        "value": "background 90ms ease-out",
+        "purpose": "The existing utility-dialog footer action hover transition."
+      }
+    ],
+    "shadows": [
+      {
+        "name": "utility-control-shadow",
+        "value": "none",
+        "purpose": "Settings inherits flat utility-dialog header and footer buttons; libadwaita owns the outer dialog shell."
+      }
+    ]
+  },
+  "components": [],
+  "narrative": {
+    "overview": "This record covers Settings and its shortcut recorder only. Both extend the existing GTK4/libadwaita utility dialog: compact text, flat form rows, a native sidebar, and native controls. The five pages are Workflow, Keyboard, Appearance, History, and About.",
+    "dos": [
+      "Do preserve native keyboard navigation, accessible control labels, wrapping descriptions, staged preference changes, and visible conflict explanations.",
+      "Do check light and dark appearances, keyboard capture, and compact width against [settings tests](../../crates/app/src/app/settings/tests.rs). Captures are under `target/settings-native-contrast/app-settings-tests-gtk_settings_shortcuts_preferences_about_and_persistence/snapshots/`."
+    ],
+    "donts": [
+      "Don't promote these settings-specific dimensions or page arrangements into a project-wide design system."
+    ]
+  }
+}

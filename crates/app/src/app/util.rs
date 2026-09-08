@@ -290,6 +290,8 @@ pub(super) fn permission_triplet(mode: u32, shift: u32) -> String {
 pub(super) fn preview_type_label(preview: &Preview) -> String {
     match &preview.payload {
         PreviewPayload::Directory => "Folder".to_owned(),
+        PreviewPayload::Table(document) => format!("{} spreadsheet", document.format),
+        PreviewPayload::Markdown { .. } => "Markdown document".to_owned(),
         PreviewPayload::Image { .. } => "Image".to_owned(),
         PreviewPayload::Pdf { page_count, .. } => {
             format!("PDF document · {page_count} page{}", plural(*page_count))

@@ -8,6 +8,11 @@ impl AppModel {
     }
 
     pub(super) fn focused_item(&self, pane: PaneId) -> Option<(VPath, EntryKind)> {
+        if let Some(target) = &self.folder_action_target
+            && target.pane == pane
+        {
+            return Some((target.path.clone(), EntryKind::Directory));
+        }
         let state = self.pane(pane);
         if state.view_mode == PaneViewMode::Columns {
             if state.selection.len() == 1 {
@@ -48,7 +53,7 @@ impl AppModel {
     }
 
     pub(super) fn start_preview(&mut self, sender: &ComponentSender<Self>) {
-        if self.pane(self.active_pane).selection.len() > 1 {
+        if self.folder_action_target.is_none() && self.pane(self.active_pane).selection.len() > 1 {
             self.preview_state.cancel();
             self.preview_state.path = None;
             self.preview_state.content = None;
@@ -199,7 +204,7 @@ impl AppModel {
         sender: &ComponentSender<Self>,
     ) {
         self.folder_measure.reset();
-        if paths.is_empty() {
+        if paths.is_empty() || !self.workflow.inspector_folder_sizes {
             return;
         }
         self.folder_measure.loading = true;
@@ -224,6 +229,10 @@ impl AppModel {
     }
 
     pub(super) fn start_git_info(&mut self, path: VPath, sender: &ComponentSender<Self>) {
+        if !self.workflow.inspector_git {
+            self.inspector_git.reset();
+            return;
+        }
         self.inspector_git.reset();
         self.inspector_git.loading = true;
         let generation = self.inspector_git.generation;

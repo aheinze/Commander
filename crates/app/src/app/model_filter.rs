@@ -250,6 +250,8 @@ impl AppModel {
             self.focus_active_files();
         } else if self.quick_look_open {
             self.quick_look_open = false;
+        } else if self.pane(pane).archive_browse.source.is_some() {
+            self.cancel_archive_open(pane, sender);
         } else if !self.pane(pane).filter_query.is_empty() {
             self.set_filter(pane, String::new(), sender);
         } else if !self.pane(pane).selection.is_empty() {

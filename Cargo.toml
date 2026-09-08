@@ -13,13 +13,17 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.96"
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [workspace.dependencies]
+calamine = { version = "0.36.1", features = ["dates"] }
+cfb = "0.14.0"
+csv = "1.4.0"
 directories = "6.0.0"
+ed25519-dalek = "2.2.0"
 crossbeam-channel = "0.5.16"
 criterion = "0.8.2"
 flate2 = "1.1.2"
@@ -38,13 +42,17 @@ notify = "8.2.0"
 nucleo = "0.5.0"
 proptest = "1.11.0"
 portable-pty = "0.9.0"
+pulldown-cmark = { version = "0.13.4", default-features = false }
+percent-encoding = "2.3.2"
 vt100 = "0.16.2"
 rayon = "1.12.0"
 regex = "1.12.2"
+resvg = "0.48.0"
 relm4 = { version = "0.11.0", default-features = false, features = ["gnome_46", "libadwaita", "macros"] }
 relm4-components = { version = "0.11.0", features = ["libadwaita"] }
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 serde_json = "1.0.151"
+semver = { version = "1.0.28", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 sevenz-rust2 = { version = "0.20.2", features = ["deflate", "lz4", "zstd", "brotli"] }
 sha2 = "0.10.9"
@@ -59,6 +67,7 @@ two-face = { version = "0.5.2", default-features = false, features = ["syntect-f
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tracing-tracy = "0.12.0"
+ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
 zip = { version = "0.6.6", default-features = false, features = ["deflate"] }
 
 [profile.release]

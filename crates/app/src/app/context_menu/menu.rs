@@ -68,22 +68,30 @@ pub(super) fn sections(
         ];
     };
     if selected == 1 {
+        let archive = !kind.is_directory() && is_archive_path(path);
         let mut open = vec![action(
-            "Open",
-            if kind.is_directory() {
+            if archive { "Browse archive" } else { "Open" },
+            if archive {
+                "commander-archive-symbolic"
+            } else if kind.is_directory() {
                 "commander-folder-symbolic"
             } else {
                 "commander-file-symbolic"
             },
-            CommandId::Open,
+            if archive {
+                CommandId::BrowseArchive
+            } else {
+                CommandId::Open
+            },
         )];
-        if kind.is_directory() {
+        if kind.is_directory() || archive {
             open.push(action(
                 "Open in new tab",
                 "commander-square-plus-symbolic",
                 CommandId::OpenInNewTab,
             ));
-        } else {
+        }
+        if !kind.is_directory() {
             open.push(action(
                 "Quick Look",
                 "commander-eye-symbolic",
@@ -219,6 +227,18 @@ pub(super) fn sections(
             CommandId::BatchRename,
         ));
     }
+    tools.push(action(
+        "Find duplicate files…",
+        "commander-search-symbolic",
+        CommandId::FindDuplicates,
+    ));
+    if *kind == EntryKind::File {
+        tools.push(action(
+            "Compare files…",
+            "commander-file-symbolic",
+            CommandId::CompareFiles,
+        ));
+    }
     groups.push((true, tools));
     let mut archives = vec![action(
         "Create archive…",
@@ -227,20 +247,30 @@ pub(super) fn sections(
     )];
     if selected == 1 && *kind == EntryKind::File && is_archive_path(path) {
         archives.push(action(
+            "Edit archive contents…",
+            "commander-archive-symbolic",
+            CommandId::EditArchive,
+        ));
+        archives.push(action(
             "Extract archive",
             "commander-archive-symbolic",
             CommandId::ExtractArchive,
         ));
     }
     groups.push((true, archives));
-    groups.push((
-        true,
-        vec![action(
-            "Delete permanently…",
+    let mut destructive = vec![action(
+        "Delete permanently…",
+        "commander-trash-symbolic",
+        CommandId::DeletePermanent,
+    )];
+    if *kind == EntryKind::File && path.as_path().is_absolute() {
+        destructive.push(action(
+            "Secure delete…",
             "commander-trash-symbolic",
-            CommandId::DeletePermanent,
-        )],
-    ));
+            CommandId::SecureDelete,
+        ));
+    }
+    groups.push((true, destructive));
     groups
 }
 
@@ -362,7 +392,10 @@ pub(super) fn build_menu(
                         spec.icon,
                         shortcut,
                         spec.command,
-                        spec.command == CommandId::DeletePermanent,
+                        matches!(
+                            spec.command,
+                            CommandId::DeletePermanent | CommandId::SecureDelete
+                        ),
                         input,
                         &popover,
                     )

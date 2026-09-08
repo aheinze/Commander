@@ -110,15 +110,50 @@ impl AppModel {
 
     pub(super) fn on_set_settings(
         &mut self,
-        appearance: AppearanceMode,
-        color_theme: ColorTheme,
-        parallel_transfers: bool,
+        mut settings: settings::SettingsDraft,
+        sender: &ComponentSender<Self>,
     ) {
-        self.appearance = appearance;
-        self.color_theme = color_theme;
-        self.parallel_transfers = parallel_transfers;
-        apply_appearance(appearance);
-        apply_color_theme(color_theme, appearance);
+        settings.workflow.recent_limit = settings.workflow.recent_limit.clamp(5, 100);
+        let sort_changed = self.workflow.directories_first != settings.workflow.directories_first;
+        let inspector_changed = self.workflow.inspector_folder_sizes
+            != settings.workflow.inspector_folder_sizes
+            || self.workflow.inspector_git != settings.workflow.inspector_git;
+        let shortcuts_changed = self.keymap.overrides() != settings.overrides;
+        self.appearance = settings.appearance;
+        self.color_theme = settings.color_theme;
+        self.parallel_transfers = settings.parallel_transfers;
+        self.workflow = settings.workflow;
+        self.keymap
+            .configure(settings.profile, settings.overrides.clone());
+        if shortcuts_changed {
+            let input = sender.input_sender().clone();
+            self.session_worker
+                .save_keymap(settings.overrides, move |result| {
+                    if let Err(error) = result {
+                        let _ = input.send(AppMsg::SettingsSaveFailed(error));
+                    }
+                });
+        }
+        if settings.clear_recent || !self.workflow.remember_recent {
+            self.recent.clear();
+        }
+        self.recent.truncate(self.workflow.recent_limit as usize);
+        apply_appearance(self.appearance);
+        apply_color_theme(self.color_theme, self.appearance);
+        if sort_changed {
+            for pane in [PaneId::Left, PaneId::Right] {
+                self.pane_mut(pane).sort.directories_first = self.workflow.directories_first;
+                self.start_listing(pane, sender);
+            }
+        }
+        if inspector_changed {
+            self.preview_state.cancel();
+            self.preview_state.path = None;
+            self.preview_state.content = None;
+            self.folder_measure.reset();
+            self.inspector_git.reset();
+            self.start_preview(sender);
+        }
         self.persist_session();
     }
 }

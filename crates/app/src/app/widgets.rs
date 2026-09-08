@@ -1,5 +1,6 @@
 //! Widget-tree updates driven from the component's `update_view` pass.
 
+use super::sidebar::menus;
 use super::*;
 
 #[derive(Eq, PartialEq)]
@@ -18,17 +19,24 @@ impl AppWidgets {
             return;
         }
         self.rendered_active_location = Some(active.clone());
+        let remote_match = self
+            .sidebar_remote_rows
+            .iter()
+            .filter(|(path, _)| active.as_path().starts_with(path.as_path()))
+            .max_by_key(|(path, _)| path.as_path().components().count())
+            .map(|(_, button)| button.clone());
         // Exactly one row lights up. A location can appear as a place, a favorite and a
         // recent at once; marking all three would read as three separate cues.
         let mut rows = self
             .sidebar_places
             .iter()
             .chain(&self.sidebar_devices.rows)
+            .chain(&self.sidebar_remote_rows)
             .chain(&self.sidebar_bookmark_rows)
             .chain(&self.sidebar_recent_rows);
         let mut marked = false;
         for (path, button) in rows.by_ref() {
-            if !marked && path == active {
+            if !marked && (path == active || remote_match.as_ref() == Some(button)) {
                 marked = true;
                 button.add_css_class("sidebar-row-active");
             } else {
@@ -40,37 +48,136 @@ impl AppWidgets {
     pub(super) fn render_sidebar_remotes(
         &mut self,
         remotes: &[String],
+        names: &BTreeMap<String, String>,
+        devices: &devices::DeviceState,
         sender: &ComponentSender<AppModel>,
     ) {
-        if self.rendered_remotes == remotes {
+        if self.rendered_remotes == remotes
+            && &self.rendered_remote_names == names
+            && self.rendered_remote_devices == Some(devices.revision())
+        {
             return;
         }
         self.rendered_remotes = remotes.to_vec();
+        self.rendered_remote_names = names.clone();
+        self.rendered_remote_devices = Some(devices.revision());
+        self.sidebar_remote_rows.clear();
+        self.rendered_active_location = None;
         while let Some(child) = self.sidebar_remotes.first_child() {
+            remove_sidebar_popovers(&child);
             self.sidebar_remotes.remove(&child);
         }
-        for (index, uri) in remotes.iter().enumerate() {
+        for uri in remotes {
+            let mount = devices.mounted_remote(uri);
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+            row.add_css_class("sidebar-remote-row");
             let label = uri
                 .split_once("://")
                 .map_or(uri.as_str(), |(_, endpoint)| endpoint);
+            let label = names.get(uri).map_or(label, String::as_str);
             let button = sidebar_button(label, "commander-server-symbolic");
             button.set_hexpand(true);
             button.set_tooltip_text(Some(uri));
+            if let Some(mount) = &mount {
+                self.sidebar_remote_rows
+                    .push((mount.destination.clone(), button.clone()));
+                button.set_sensitive(!mount.busy);
+                let destination = mount.destination.clone();
+                install_file_drop_target(&button, sender, self.file_drag_ui.clone(), move |_| {
+                    Some(destination.clone())
+                });
+            }
             let input = sender.input_sender().clone();
             let destination = uri.clone();
+            let mounted_path = mount.as_ref().map(|mount| mount.destination.clone());
             button.connect_clicked(move |_| {
-                let _ = input.send(AppMsg::ConnectRemote(destination.clone()));
+                let _ = input.send(mounted_path.clone().map_or_else(
+                    || AppMsg::ConnectRemote(destination.clone()),
+                    AppMsg::NavigateActive,
+                ));
             });
-            let remove = icon_button("commander-trash-symbolic", "Forget remote connection");
-            remove.add_css_class("flat");
-            remove.add_css_class("sidebar-remove");
-            let input = sender.input_sender().clone();
-            remove.connect_clicked(move |_| {
-                let _ = input.send(AppMsg::RemoveRemote(index));
-            });
+            let (menu, actions) = sidebar_context_menu(&button, label);
+            if let Some(mount) = &mount {
+                menus::location_actions(
+                    &menu,
+                    &actions,
+                    &mount.destination,
+                    true,
+                    sender.input_sender(),
+                );
+                if mount.removable {
+                    let key = mount.key.clone();
+                    menus::message(
+                        &menu,
+                        &actions,
+                        "Disconnect",
+                        "commander-eject-symbolic",
+                        sender.input_sender(),
+                        move || AppMsg::RemoveDevice(key.clone()),
+                    );
+                }
+                actions.set_sensitive(!mount.busy);
+                menus::separator(&actions);
+            } else {
+                let uri = uri.clone();
+                menus::message(
+                    &menu,
+                    &actions,
+                    "Connect",
+                    "commander-server-symbolic",
+                    sender.input_sender(),
+                    move || AppMsg::ConnectRemote(uri.clone()),
+                );
+            }
+            for (label, icon, action) in [
+                (
+                    "Edit connection…",
+                    "commander-pencil-symbolic",
+                    AppMsg::EditRemote as fn(String) -> AppMsg,
+                ),
+                (
+                    "Forget connection",
+                    "commander-trash-symbolic",
+                    AppMsg::RemoveRemote,
+                ),
+            ] {
+                let item = context_menu_item_button(label, icon, None);
+                if label == "Forget connection" {
+                    item.add_css_class("destructive-action");
+                }
+                let input = sender.input_sender().clone();
+                let menu = menu.clone();
+                let uri = uri.clone();
+                item.connect_clicked(move |_| {
+                    menu.popdown();
+                    let _ = input.send(action(uri.clone()));
+                });
+                actions.append(&item);
+            }
+            menus::separator(&actions);
+            let clipboard = button.clipboard();
+            let address = uri.clone();
+            menus::action(
+                &menu,
+                &actions,
+                "Copy address",
+                "commander-copy-symbolic",
+                move || clipboard.set_text(&address),
+            );
+            menus::install(&button, &menu);
             row.append(&button);
-            row.append(&remove);
+            if let Some(mount) = mount.filter(|mount| mount.removable) {
+                let disconnect =
+                    icon_button("commander-eject-symbolic", "Disconnect remote connection");
+                disconnect.add_css_class("flat");
+                disconnect.add_css_class("sidebar-device-eject");
+                disconnect.set_sensitive(!mount.busy);
+                let input = sender.input_sender().clone();
+                disconnect.connect_clicked(move |_| {
+                    let _ = input.send(AppMsg::RemoveDevice(mount.key.clone()));
+                });
+                row.append(&disconnect);
+            }
             self.sidebar_remotes.append(&row);
         }
     }
@@ -89,6 +196,7 @@ impl AppWidgets {
         }
         self.rendered_workspaces = rendered;
         while let Some(child) = self.sidebar_workspaces.first_child() {
+            remove_sidebar_popovers(&child);
             self.sidebar_workspaces.remove(&child);
         }
         if workspaces.is_empty() {
@@ -132,7 +240,7 @@ impl AppWidgets {
                 let _ = input.send(AppMsg::OpenWorkspace(index));
             });
 
-            let (menu, actions) = sidebar_context_menu(&row);
+            let (menu, actions) = sidebar_context_menu(&button, &workspace.name);
 
             let open =
                 context_menu_item_button("Open Workspace", "commander-folder-open-symbolic", None);
@@ -189,16 +297,7 @@ impl AppWidgets {
             }
             actions.append(&remove);
 
-            let click = gtk::GestureClick::new();
-            click.set_button(gdk::BUTTON_SECONDARY);
-            {
-                let menu = menu.clone();
-                click.connect_pressed(move |_, _, x, y| {
-                    menu.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-                    menu.popup();
-                });
-            }
-            button.add_controller(click);
+            menus::install(&button, &menu);
             row.append(&button);
             self.sidebar_workspaces.append(&row);
         }
@@ -217,6 +316,7 @@ impl AppWidgets {
         self.sidebar_recent_rows.clear();
         self.rendered_active_location = None;
         while let Some(child) = self.sidebar_recent.first_child() {
+            remove_sidebar_popovers(&child);
             self.sidebar_recent.remove(&child);
         }
         if recent.is_empty() {
@@ -246,6 +346,27 @@ impl AppWidgets {
             install_file_drop_target(&button, sender, Rc::clone(&self.file_drag_ui), move |_| {
                 Some(drop_destination.clone())
             });
+            let (menu, actions) = sidebar_context_menu(&button, label);
+            menus::location_actions(&menu, &actions, path, true, sender.input_sender());
+            menus::separator(&actions);
+            let path = path.clone();
+            menus::message(
+                &menu,
+                &actions,
+                "Remove from Recent",
+                "commander-x-symbolic",
+                sender.input_sender(),
+                move || AppMsg::RemoveRecent(path.clone()),
+            );
+            menus::message(
+                &menu,
+                &actions,
+                "Clear recent locations",
+                "commander-trash-symbolic",
+                sender.input_sender(),
+                || AppMsg::ClearRecent,
+            );
+            menus::install(&button, &menu);
             self.sidebar_recent.append(&button);
         }
     }
@@ -255,6 +376,7 @@ impl AppWidgets {
         bookmarks: &[VPath],
         labels: &BTreeMap<String, String>,
         groups: &[FavoriteGroupSession],
+        collapsed: &BTreeSet<String>,
         sender: &ComponentSender<AppModel>,
     ) {
         let rendered = SidebarFavorites {
@@ -267,6 +389,7 @@ impl AppWidgets {
         }
         self.rendered_bookmarks = Some(rendered);
         self.sidebar_bookmark_rows.clear();
+        self.sidebar_favorite_groups.clear();
         self.rendered_active_location = None;
         while let Some(child) = self.sidebar_bookmarks.first_child() {
             remove_sidebar_popovers(&child);
@@ -323,7 +446,9 @@ impl AppWidgets {
                 });
             }
             button.add_controller(drop);
-            let (menu, actions) = sidebar_context_menu(&button);
+            let (menu, actions) = sidebar_context_menu(&button, &label);
+            menus::location_actions(&menu, &actions, path, false, sender.input_sender());
+            menus::separator(&actions);
             append_favorite_rename_action(&menu, &actions, None, path, &label, sender);
             for (label, icon, message) in [
                 (
@@ -369,27 +494,19 @@ impl AppWidgets {
                 }
                 actions.append(&action);
             }
-            let click = gtk::GestureClick::new();
-            click.set_button(3);
-            {
-                let menu = menu.clone();
-                click.connect_pressed(move |_, _, x, y| {
-                    menu.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-                    menu.popup();
-                });
-            }
-            button.add_controller(click);
+            menus::install(&button, &menu);
             self.sidebar_bookmarks.append(&button);
         }
         for (group_index, group) in groups.iter().enumerate() {
-            let heading = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            let key = sidebar::favorite_group_key(&group.name);
+            let section = sidebar::CollapsibleGroup::new(
+                &key,
+                &group.name,
+                !collapsed.contains(&key),
+                sender.input_sender(),
+            );
+            let heading = section.heading.clone();
             heading.add_css_class("favorite-group-heading");
-            let label = gtk::Label::new(Some(&group.name));
-            label.set_xalign(0.0);
-            label.set_hexpand(true);
-            label.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            label.set_max_width_chars(SIDEBAR_LABEL_WIDTH_CHARS);
-            label.set_single_line_mode(true);
             let add = icon_button(
                 "commander-plus-symbolic",
                 "Add current folder to this group",
@@ -407,16 +524,43 @@ impl AppWidgets {
             remove.connect_clicked(move |_| {
                 let _ = input.send(AppMsg::RemoveFavoriteGroup(group_index));
             });
-            heading.append(&label);
             heading.append(&add);
             heading.append(&remove);
-            self.sidebar_bookmarks.append(&heading);
+            heading.update_property(&[gtk::accessible::Property::Label(&group.name)]);
+            let (menu, actions) = sidebar_context_menu(&heading, &group.name);
+            menus::message(
+                &menu,
+                &actions,
+                "Add current folder to group",
+                "commander-folder-plus-symbolic",
+                sender.input_sender(),
+                move || AppMsg::AddCurrentToFavoriteGroup(group_index),
+            );
+            menus::message(
+                &menu,
+                &actions,
+                "New favorite group…",
+                "commander-plus-symbolic",
+                sender.input_sender(),
+                || AppMsg::ExecuteCommand(CommandId::NewFavoriteGroup),
+            );
+            menus::separator(&actions);
+            menus::message(
+                &menu,
+                &actions,
+                "Remove favorite group",
+                "commander-trash-symbolic",
+                sender.input_sender(),
+                move || AppMsg::RemoveFavoriteGroup(group_index),
+            );
+            menus::install(&heading, &menu);
+            section.append_to(&self.sidebar_bookmarks);
             if group.paths.is_empty() {
                 let empty = gtk::Label::new(Some("Add the active folder with +"));
                 empty.add_css_class("dim-label");
                 empty.add_css_class("favorite-group-empty");
                 empty.set_xalign(0.0);
-                self.sidebar_bookmarks.append(&empty);
+                section.content.append(&empty);
             }
             for (item_index, path) in group.paths.iter().enumerate() {
                 let path = VPath::from(path.as_str());
@@ -439,7 +583,9 @@ impl AppWidgets {
                     Rc::clone(&self.file_drag_ui),
                     move |_| Some(drop_destination.clone()),
                 );
-                let (menu, actions) = sidebar_context_menu(&button);
+                let (menu, actions) = sidebar_context_menu(&button, &label);
+                menus::location_actions(&menu, &actions, &path, false, sender.input_sender());
+                menus::separator(&actions);
                 append_favorite_rename_action(
                     &menu,
                     &actions,
@@ -448,13 +594,19 @@ impl AppWidgets {
                     &label,
                     sender,
                 );
-                let click = gtk::GestureClick::new();
-                click.set_button(3);
-                click.connect_pressed(move |_, _, x, y| {
-                    menu.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-                    menu.popup();
-                });
-                button.add_controller(click);
+                menus::separator(&actions);
+                menus::message(
+                    &menu,
+                    &actions,
+                    "Remove from group",
+                    "commander-trash-symbolic",
+                    sender.input_sender(),
+                    move || AppMsg::RemoveGroupedFavorite {
+                        group: group_index,
+                        item: item_index,
+                    },
+                );
+                menus::install(&button, &menu);
                 let remove = icon_button("commander-x-symbolic", "Remove from group");
                 remove.add_css_class("flat");
                 remove.add_css_class("sidebar-remove");
@@ -467,8 +619,9 @@ impl AppWidgets {
                 });
                 row.append(&button);
                 row.append(&remove);
-                self.sidebar_bookmarks.append(&row);
+                section.content.append(&row);
             }
+            self.sidebar_favorite_groups.push(section);
         }
     }
 
@@ -580,7 +733,7 @@ fn favorite_label(path: &VPath, labels: &BTreeMap<String, String>) -> String {
         })
 }
 
-fn remove_sidebar_popovers(widget: &gtk::Widget) {
+pub(super) fn remove_sidebar_popovers(widget: &gtk::Widget) {
     let mut child = widget.first_child();
     while let Some(widget) = child {
         child = widget.next_sibling();
@@ -617,20 +770,8 @@ fn append_favorite_rename_action(
 }
 
 /// Creates sidebar popovers with the same surface and action insets as file menus.
-fn sidebar_context_menu(parent: &impl IsA<gtk::Widget>) -> (gtk::Popover, gtk::Box) {
-    let menu = gtk::Popover::new();
-    menu.add_css_class("file-context-menu");
-    menu.set_autohide(true);
-    menu.set_has_arrow(false);
-    menu.set_parent(parent);
-
-    let actions = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    actions.set_margin_top(6);
-    actions.set_margin_bottom(6);
-    actions.set_margin_start(6);
-    actions.set_margin_end(6);
-    menu.set_child(Some(&actions));
-    (menu, actions)
+fn sidebar_context_menu(parent: &impl IsA<gtk::Widget>, name: &str) -> (gtk::Popover, gtk::Box) {
+    menus::new(parent, name)
 }
 
 /// Renders an accelerator label such as `Ctrl+Shift+P / F1` as individual key caps.

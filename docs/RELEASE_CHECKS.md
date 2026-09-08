@@ -30,9 +30,19 @@ An empty test selection fails. `results.json` records each exit status and durat
 CI uploads these artifacts even when a regression fails.
 
 The native suite checks selection/reveal in all three views, Favorites labels,
-activity controls, archive round trips, live filesystem updates, previews, remote
-connection forms, terminal tabs, bundled icons, large search results, comparison
-and sync review, and both modern and GTK 4.14-compatible stylesheets. It runs
+activity controls, archive round trips, archive folder browsing (nested archives,
+tabs, session restore, copy out, cancellation, and read-only inspector state),
+secure-delete review and cancellation, captured selections, stale-file rejection,
+and overwrite verification with disposable fixtures,
+live filesystem updates, previews, remote
+connection forms, saved remote editing, custom names and offline persistence, terminal tabs,
+bundled icons, large search results, comparison
+and sync review, settings Cancel/Apply, keyboard capture and conflict reassignment, shortcut persistence,
+About diagnostics, tab folder menus (including inactive tabs, both panes, selection isolation,
+and deferred archive/delete confirmations), formatted Markdown and heading links,
+per-pane Git status (external branch changes, tab switches, non-repository folders,
+and compact footers in light and dark appearances),
+and both modern and GTK 4.14-compatible stylesheets. It runs
 separately from `cargo test`, because GTK must initialize on one thread per process.
 
 For the 100,000-entry latency gate, generate a new fixture once, then reuse it:
@@ -42,20 +52,63 @@ cargo xtask gen-fixtures --root target/fixtures/flat-100k --files 100000 --files
 cargo xtask check-m1-budgets --root target/fixtures/flat-100k/bucket-000000
 ```
 
+## Release update checks
+
+`cargo test --package dualpane-app updates::tests --locked` covers semantic version
+ordering, stable-only selection, ETag reuse, rate-limit backoff, unsigned releases,
+Ed25519 signature verification, architecture/glibc selection, corrupt downloads,
+cancellation, and destination-file races. Packaging tests also reject mismatched
+signing keys, incomplete inventories, and changed assets before signing.
+
+Run `python3 scripts/test-native.py --backend wayland --filter gtk_updates` for the
+About update controls, progress/error states, skipped versions, and cancellation
+on dialog closure. These tests use fixtures and never contact GitHub or launch an
+installer. Before publishing, configure the signing key described in the
+[packaging guide](../packaging/README.md#update-signing-key), then check a signed
+release from a previously installed build. Verify the saved package with
+`sha256sum -c SHA256SUMS` and install it using the normal package manager or
+AppImage workflow. Background checks and self-replacement are not yet implemented.
+
 ## Search guarantees
 
 Search retains accessible matches when a child folder, file, or directory entry
-cannot be read. Its status reports incomplete coverage, with a keyboard-accessible
-Details popover showing the first error. An inaccessible root or invalid query
-produces an error instead of an empty successful search.
+cannot be read. An error toast reports incomplete coverage and the first error,
+with Copy preserving the full diagnostic. The inline status retains the result
+count and search progress. An inaccessible root or invalid query produces an
+error toast instead of reporting an empty successful search.
 
-Results are sorted and capped at 10,000 with an explicit limit notice. All returned
+Results are sorted and capped at 10,000 with an explicit limit toast. All returned
 matches remain accessible through a virtualized list. Type, extension, size, and
 date filters run before content reads. Content scans default to 8 MiB per file and
 allow up to 64 MiB; larger files and binary files are not scanned. Symbolic-link
 entries can be included, but linked directories are not traversed. Stop and dialog
 closure invalidate late completions. Content reads check cancellation between
 128 KiB chunks; a filesystem call already blocked in the OS must return first.
+
+## Sidebar group regressions
+
+Run `python3 scripts/test-native.py --backend wayland --filter gtk_sidebar` after
+changes to sidebar groups. It covers saved collapsed state, keyboard ownership,
+independent add controls, refreshed devices and favorites, and context menus.
+Collapsed content must not take keyboard focus; Trash and section headers remain
+reachable. The session round-trip and legacy-session tests cover state persistence
+and expanded defaults for older sessions.
+
+## Notification regressions
+
+Run `python3 scripts/test-native.py --backend wayland --filter gtk_toasts` for the
+shared notification gate. It checks replacement of inline pane errors, plain-text
+rendering, redraw suppression, the four-toast queue, error priority, full diagnostic
+copying, compact Unicode text, dialog overlays, debounced field validation, recovery
+actions, and timeout dismissal. Light/dark and compact-dialog screenshots are saved
+with the test artifacts. The current field tooltip must survive toast dismissal
+and clear once the value is valid; closing a dialog must not emit late validation.
+
+Exercise errors in search, comparison, previews, remote forms, settings updates,
+custom tools, and recovery when changing those flows. Confirm feedback stays visible
+above the active dialog and does not add inline error or information rows. Normal
+counts/progress, static instructions, durable reports, and safety confirmations
+must remain available. Keep the affected native workflow tests in the release gate.
 
 ## Reviewed folder synchronization
 

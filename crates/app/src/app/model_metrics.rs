@@ -233,13 +233,15 @@ impl AppModel {
 
     pub(super) fn persist_session(&self) {
         self.session_worker.save(SessionState {
+            workflow: self.workflow.clone(),
             vertical_split: self.vertical_split,
             dual_pane: self.dual_pane,
             split_position: self.split_position,
-            left: self.panes[0].to_session(),
-            right: self.panes[1].to_session(),
+            left: self.archive_mounts.session(self.panes[0].to_session()),
+            right: self.archive_mounts.session(self.panes[1].to_session()),
             keymap_profile: self.keymap.profile(),
             sidebar_visible: self.sidebar_visible,
+            collapsed_sidebar_groups: self.collapsed_sidebar_groups.clone(),
             preview_visible: self.preview_visible,
             preview_width: self.preview_width,
             bookmarks: self.bookmarks.iter().map(ToString::to_string).collect(),
@@ -250,6 +252,7 @@ impl AppModel {
             window_height: self.window_height,
             workspaces: self.workspaces.clone(),
             remote_uris: self.remote_uris.clone(),
+            remote_names: self.remote_names.clone(),
             appearance: self.appearance,
             color_theme: self.color_theme,
             parallel_transfers: self.parallel_transfers,

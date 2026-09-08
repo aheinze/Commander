@@ -12,6 +12,7 @@ mod omarchy;
 mod pdf;
 mod session;
 mod terminal;
+mod updates;
 
 use std::error::Error;
 use std::time::Instant;

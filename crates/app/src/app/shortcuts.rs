@@ -89,10 +89,39 @@ pub(super) fn install_shortcuts(
         let control = modifiers.contains(gdk::ModifierType::CONTROL_MASK);
         let alt = modifiers.contains(gdk::ModifierType::ALT_MASK);
         let focused = gtk::prelude::GtkWindowExt::focus(&key_window);
+        if (key == gdk::Key::Menu
+            || (key == gdk::Key::F10 && modifiers == gdk::ModifierType::SHIFT_MASK))
+            && focused.as_ref().is_some_and(|focus| {
+                widget_has_ancestor_css_class(focus, &["sidebar-row", "favorite-group-heading"])
+            })
+        {
+            // Let the focused sidebar entry open its own context menu.
+            return glib::Propagation::Proceed;
+        }
+        if focused.as_ref().is_some_and(|focus| {
+            widget_has_ancestor_css_class(focus, &["markdown-content", "table-preview"])
+        }) && !matches!(
+            keymap.command_for(key, modifiers),
+            Some(
+                CommandId::FocusFiles
+                    | CommandId::CommandPalette
+                    | CommandId::ClearLayered
+                    | CommandId::QuickLook
+            )
+        ) {
+            // Copy and selection keys belong to the document, not the file pane.
+            return glib::Propagation::Proceed;
+        }
         if focused.as_ref().is_some_and(|focus| {
             widget_has_ancestor_css_class(
                 focus,
-                &["file-context-menu", "breadcrumb-ancestors", "tools-dialog"],
+                &[
+                    "file-context-menu",
+                    "breadcrumb-ancestors",
+                    "tools-dialog",
+                    "settings-dialog",
+                    "shortcut-capture-dialog",
+                ],
             )
         }) {
             // These surfaces own navigation, typing, and activation while focused.
@@ -114,6 +143,8 @@ pub(super) fn install_shortcuts(
                     | gdk::Key::space
                     | gdk::Key::Left
                     | gdk::Key::Right
+                    | gdk::Key::KP_Left
+                    | gdk::Key::KP_Right
                     | gdk::Key::Up
                     | gdk::Key::Down
                     | gdk::Key::Home
@@ -122,7 +153,10 @@ pub(super) fn install_shortcuts(
                 .to_unicode()
                 .is_some_and(|character| !character.is_control()))
             && focused.as_ref().is_some_and(|focus| {
-                widget_has_ancestor_css_class(focus, &["breadcrumbs", "breadcrumb-icon"])
+                widget_has_ancestor_css_class(
+                    focus,
+                    &["breadcrumbs", "breadcrumb-icon", "sidebar-heading-row"],
+                )
             })
         {
             return glib::Propagation::Proceed;

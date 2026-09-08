@@ -681,12 +681,16 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
         &VPath::from(unavailable.as_path())
     );
     assert!(app.widgets().topbar.view_buttons[0].is_active());
-    for (button, name) in [
-        (app.widgets().topbar.new_menu.clone(), "topbar-new"),
-        (app.widgets().topbar.view_menu.clone(), "topbar-view"),
-        (app.widgets().topbar.layout_menu.clone(), "topbar-layout"),
-        (app.widgets().topbar.more_menu.clone(), "topbar-more"),
-    ] {
+    let menus = {
+        let widgets = app.widgets();
+        [
+            (widgets.topbar.new_menu.clone(), "topbar-new"),
+            (widgets.topbar.view_menu.clone(), "topbar-view"),
+            (widgets.topbar.layout_menu.clone(), "topbar-layout"),
+            (widgets.topbar.more_menu.clone(), "topbar-more"),
+        ]
+    };
+    for (button, name) in menus {
         button.popup();
         drain_frames();
         snapshot_popover(app.widget(), &button.popover().unwrap(), name);

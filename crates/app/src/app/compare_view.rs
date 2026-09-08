@@ -18,7 +18,7 @@ pub(super) struct Comparison {
     refresh: gtk::Button,
     apply: gtk::Button,
     stop: gtk::Button,
-    status: gtk::Label,
+    status: notifications::Feedback,
     route: gtk::Label,
     store: gio::ListStore,
     entries: RefCell<Option<Vec<CompareEntry>>>,
@@ -50,7 +50,7 @@ pub(super) fn show(
         .content_height(640)
         .build();
     let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
+    view.add_top_bar(&chrome::dialog_header(&dialog));
     let root = gtk::Box::new(gtk::Orientation::Vertical, 12);
     root.set_margin_start(18);
     root.set_margin_end(18);
@@ -93,12 +93,7 @@ pub(super) fn show(
     route.set_wrap(true);
     route.add_css_class("heading");
     root.append(&route);
-    let status = gtk::Label::new(None);
-    status.set_xalign(0.0);
-    status.set_wrap(true);
-    status.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-    status.set_max_width_chars(90);
-    root.append(&status);
+    let status = notifications::Feedback::default();
     let store = gio::ListStore::new::<glib::BoxedAnyObject>();
     let list = gtk::ListView::new(
         Some(gtk::NoSelection::new(Some(store.clone()))),
@@ -195,7 +190,7 @@ pub(super) fn show(
                 state.cancel.borrow().cancel();
                 state
                     .status
-                    .set_label("Stopping after the current filesystem call…");
+                    .info("Stopping after the current filesystem call…");
             }
         });
     }
@@ -240,7 +235,7 @@ impl Comparison {
         let cancel = CancelToken::new();
         self.cancel.replace(cancel.clone());
         let verified = self.verify.is_active();
-        self.status.set_label(if verified {
+        self.status.info(if verified {
             "Comparing contents with SHA-256…"
         } else {
             "Comparing sizes and modification times…"
@@ -263,7 +258,7 @@ impl Comparison {
         if let Err(error) = worker {
             self.set_busy(false);
             self.status
-                .set_label(&format!("Could not start comparison: {error}"));
+                .error(&format!("Could not start comparison: {error}"));
             return;
         }
         let weak = Rc::downgrade(self);
@@ -279,7 +274,7 @@ impl Comparison {
                             state.entries.replace(Some(entries));
                             state.review();
                         }
-                        Err(error) => state.status.set_label(&error),
+                        Err(error) => state.status.error(&error),
                     }
                     glib::ControlFlow::Break
                 }
@@ -288,7 +283,7 @@ impl Comparison {
                     state.set_busy(false);
                     state
                         .status
-                        .set_label("Comparison stopped unexpectedly. Compare again.");
+                        .error("Comparison stopped unexpectedly. Compare again.");
                     glib::ControlFlow::Break
                 }
             }
@@ -358,7 +353,7 @@ impl Comparison {
                     .iter()
                     .filter(|action| action.kind == SyncActionKind::Trash)
                     .count();
-                self.status.set_label(&if plan.blocked() {
+                self.status.info(&if plan.blocked() {
                     "Resolve the listed type conflicts or unsupported entries, then compare again."
                         .into()
                 } else if plan.actions.is_empty() {
@@ -392,7 +387,7 @@ impl Comparison {
             Err(error) => {
                 self.plan.replace(None);
                 self.apply.set_sensitive(false);
-                self.status.set_label(&error);
+                self.status.error(&error);
             }
         }
     }
@@ -430,8 +425,7 @@ impl Comparison {
             });
         if let Err(error) = worker {
             self.set_busy(false);
-            self.status
-                .set_label(&format!("Could not start sync: {error}"));
+            self.status.error(&format!("Could not start sync: {error}"));
             return;
         }
         let weak = Rc::downgrade(self);
@@ -441,10 +435,10 @@ impl Comparison {
             };
             loop {
                 match rx.try_recv() {
-                    Ok(Err(progress)) => state.status.set_label(&progress),
+                    Ok(Err(progress)) => state.stop.set_tooltip_text(Some(&progress)),
                     Ok(Ok(result)) => {
                         state.set_busy(false);
-                        state.status.set_label(&match result { Ok(count) => format!("Applied {count} changes. Compare again to review the updated folders."), Err(error) => error });
+                        match result { Ok(count) => state.status.success(&format!("Applied {count} changes. Compare again to review the updated folders.")), Err(error) => state.status.error(&error) };
                         return glib::ControlFlow::Break;
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -454,7 +448,7 @@ impl Comparison {
                         state.set_busy(false);
                         state
                             .status
-                            .set_label("Sync stopped unexpectedly. Compare again before retrying.");
+                            .error("Sync stopped unexpectedly. Compare again before retrying.");
                         return glib::ControlFlow::Break;
                     }
                 }

@@ -53,7 +53,7 @@ impl JobPresentation {
         // Trash and delete report items; their scanned byte totals are not bytes copied.
         let use_bytes = matches!(
             operation.kind,
-            OperationKind::Files(JobKind::Copy | JobKind::Move)
+            OperationKind::Files(JobKind::Copy | JobKind::Move) | OperationKind::SecureDelete
         ) && values.bytes_total > 0;
         let (done, total) = if use_bytes {
             (values.bytes_done, values.bytes_total)
@@ -94,6 +94,7 @@ impl JobPresentation {
             OperationKind::Files(JobKind::DeletePermanent) => "Deleting",
             OperationKind::CreateArchive => "Creating archive",
             OperationKind::ExtractArchive => "Extracting archive",
+            OperationKind::SecureDelete => "Overwriting files",
         };
         let title = if status == "In progress" {
             verb.to_owned()
@@ -142,6 +143,7 @@ impl JobPresentation {
                     | OperationRetry::Move { sources, .. }
                     | OperationRetry::Trash { sources, .. }
                     | OperationRetry::Delete { sources, .. }
+                    | OperationRetry::SecureDelete { sources }
                     | OperationRetry::Archive { sources, .. } => sources,
                 };
                 sources
@@ -166,7 +168,10 @@ impl JobPresentation {
             can_pause: operation.can_control() && !operation.waiting_for_conflict,
             can_cancel: operation.can_control(),
             can_retry: matches!(operation.state, JobState::Cancelled | JobState::Failed)
-                && operation.kind != OperationKind::ExtractArchive,
+                && !matches!(
+                    operation.kind,
+                    OperationKind::ExtractArchive | OperationKind::SecureDelete
+                ),
             finished: !active,
         }
     }
@@ -217,7 +222,6 @@ struct JobRowWidgets {
     status: gtk::Label,
     detail: gtk::Label,
     path: gtk::Label,
-    error: gtk::Label,
     progress: gtk::ProgressBar,
     spinner: gtk::Spinner,
     pause: gtk::Button,
@@ -248,13 +252,11 @@ impl JobRowWidgets {
         detail.set_wrap(true);
         detail.set_ellipsize(gtk::pango::EllipsizeMode::None);
         let path = ellipsized_label("operation-path");
-        let error = ellipsized_label("operation-message");
         root.append(&detail);
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         footer.append(&path);
         footer.append(&status);
         root.append(&footer);
-        root.append(&error);
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         actions.set_halign(gtk::Align::End);
         let pause = icon_button("commander-pause-symbolic", "Pause operation");
@@ -279,7 +281,6 @@ impl JobRowWidgets {
             status,
             detail,
             path,
-            error,
             progress,
             spinner,
             pause,
@@ -306,15 +307,6 @@ impl JobRowWidgets {
         self.detail.set_tooltip_text(Some(&view.detail));
         self.path.set_label(&view.path);
         self.path.set_tooltip_text(Some(&view.path));
-        self.error
-            .set_label(view.error.as_deref().unwrap_or_default());
-        self.error.set_tooltip_text(view.error.as_deref());
-        self.error.set_visible(view.error.is_some());
-        if operation.state == JobState::Cancelled {
-            self.error.remove_css_class("operation-message-error");
-        } else {
-            self.error.add_css_class("operation-message-error");
-        }
         self.spinner.set_spinning(view.busy);
         self.spinner.set_visible(view.busy);
         self.pause.set_icon_name(if view.paused {

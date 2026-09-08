@@ -119,6 +119,7 @@ fn gtk_device_removal_updates_sidebar_and_handles_busy_drives() {
                 key: "usb".to_owned(),
                 name: "USB Drive".to_owned(),
                 root: Some(roots[0].clone()),
+                uri: None,
                 remote: false,
                 removal: Some(Removal::Stop),
                 removal_name: "USB Drive (all volumes)".to_owned(),
@@ -127,6 +128,7 @@ fn gtk_device_removal_updates_sidebar_and_handles_busy_drives() {
                 key: "system".to_owned(),
                 name: "System Disk".to_owned(),
                 root: Some(home_path()),
+                uri: None,
                 remote: false,
                 removal: None,
                 removal_name: "System Disk".to_owned(),
@@ -179,10 +181,18 @@ fn gtk_device_removal_updates_sidebar_and_handles_busy_drives() {
             .has_css_class("sidebar-row-active")
     );
     snapshot(&app, "devices-ready");
+    assert!(
+        device_menu_action(&app.widgets().sidebar_devices.rows[0].1, "Open in new tab").is_some()
+    );
+    assert!(
+        device_menu_action(&app.widgets().sidebar_devices.rows[1].1, "Safely Remove").is_none()
+    );
 
     *fake.failure.borrow_mut() =
         Some("USB Drive is busy. Close files and terminals using it, then try again.".to_owned());
-    eject_buttons(&app)[0].emit_clicked();
+    device_menu_action(&app.widgets().sidebar_devices.rows[0].1, "Safely Remove")
+        .unwrap()
+        .emit_clicked();
     wait_until(|| app.model().devices.busy.is_some());
     assert!(
         app.widgets()
@@ -272,13 +282,16 @@ fn gtk_device_removal_updates_sidebar_and_handles_busy_drives() {
         key: "usb-again".to_owned(),
         name: "USB Drive".to_owned(),
         root: None,
+        uri: None,
         remote: false,
         removal: Some(Removal::Stop),
         removal_name: "USB Drive".to_owned(),
     });
     app.emit(AppMsg::DevicesChanged);
     wait_until(|| eject_buttons(&app).len() == 1);
-    app.emit(AppMsg::OpenDevice("usb-again".to_owned()));
+    device_menu_action(&app.widgets().sidebar_devices.devices, "Mount and open")
+        .unwrap()
+        .emit_clicked();
     wait_until(|| app.model().devices.busy.is_some());
     wait_until(|| app.model().devices.busy.is_none());
     assert_eq!(app.model().pane(active).current_directory(), &roots[0]);
@@ -295,7 +308,100 @@ fn gtk_device_removal_updates_sidebar_and_handles_busy_drives() {
     app.emit(AppMsg::DeviceMountRemoved(roots[0].clone()));
     wait_until(|| app.model().pane(active).current_directory() == &home_path());
     assert!(eject_buttons(&app).is_empty());
+    fake.entries.borrow_mut().push(DeviceEntry {
+        key: "remote-test".into(),
+        name: "Connected server".into(),
+        root: Some(roots[1].clone()),
+        uri: Some("sftp://alex@server.invalid".into()),
+        remote: true,
+        removal: Some(Removal::Unmount),
+        removal_name: "Connected server".into(),
+    });
+    app.emit(AppMsg::DevicesChanged);
+    wait_until(|| {
+        device_menu_action(&app.widgets().sidebar_devices.mounts, "Disconnect").is_some()
+    });
+    assert!(device_menu_action(&app.widgets().sidebar_devices.mounts, "Copy path").is_some());
+    let saved = "sftp://alex@server.invalid/projects".to_owned();
+    let projects = second.join("projects");
+    std::fs::create_dir_all(projects.join("nested")).unwrap();
+    {
+        let mut state = app.state().get_mut();
+        state.model.remote_uris.push(saved.clone());
+        state
+            .model
+            .remote_names
+            .insert(saved.clone(), "Work server".into());
+    }
+    app.emit(AppMsg::DevicesChanged);
+    wait_until(|| app.widgets().sidebar_remote_rows.len() == 1);
+    assert!(
+        app.widgets().sidebar_devices.mounts.first_child().is_none(),
+        "The mount must be represented by its saved connection"
+    );
+    let merged = app.widgets().sidebar_remote_rows[0].1.clone();
+    assert!(device_menu_action(&app.widgets().sidebar_remotes, "Edit connection…").is_some());
+    assert!(device_menu_action(&app.widgets().sidebar_remotes, "Disconnect").is_some());
+    merged.emit_clicked();
+    wait_until(|| app.model().pane(active).current_directory().as_path() == projects);
+    app.emit(AppMsg::NavigateActive(VPath::from(projects.join("nested"))));
+    wait_until(|| {
+        !app.model().pane(active).loading
+            && app.model().pane(active).current_directory().as_path() == projects.join("nested")
+    });
+    assert!(merged.has_css_class("sidebar-row-active"));
+    snapshot(&app, "remote-saved-and-mounted-merged");
+    app.emit(AppMsg::RemoveRemote(saved.clone()));
+    wait_until(|| {
+        app.widgets().sidebar_remote_rows.is_empty()
+            && device_menu_action(&app.widgets().sidebar_devices.mounts, "Disconnect").is_some()
+    });
+    assert!(
+        fake.entries
+            .borrow()
+            .iter()
+            .any(|entry| entry.key == "remote-test"),
+        "Forgetting a bookmark must not disconnect the mount"
+    );
+    app.state().get_mut().model.remote_uris.push(saved.clone());
+    app.emit(AppMsg::DevicesChanged);
+    wait_until(|| app.widgets().sidebar_remote_rows.len() == 1);
+    device_menu_action(&app.widgets().sidebar_remotes, "Disconnect")
+        .unwrap()
+        .emit_clicked();
+    wait_until(|| {
+        !fake
+            .entries
+            .borrow()
+            .iter()
+            .any(|entry| entry.key == "remote-test")
+            && app.model().devices.busy.is_none()
+    });
+    assert!(
+        app.model().remote_uris.contains(&saved),
+        "Disconnecting must keep the saved connection"
+    );
+    assert!(app.widgets().sidebar_remote_rows.is_empty());
+    assert!(device_menu_action(&app.widgets().sidebar_remotes, "Connect").is_some());
     app.widget().close();
+}
+
+fn device_menu_action(root: &impl IsA<gtk::Widget>, label: &str) -> Option<gtk::Button> {
+    let widget = root.as_ref();
+    if let Some(button) = widget.downcast_ref::<gtk::Button>()
+        && button.has_css_class("context-menu-item")
+        && button.tooltip_text().as_deref() == Some(label)
+    {
+        return Some(button.clone());
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        if let Some(button) = device_menu_action(&widget, label) {
+            return Some(button);
+        }
+        child = widget.next_sibling();
+    }
+    None
 }
 
 fn eject_buttons(app: &relm4::Controller<AppModel>) -> Vec<gtk::Button> {
@@ -328,7 +434,13 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
 }
 
 fn snapshot(app: &relm4::Controller<AppModel>, name: &str) {
-    let Some(directory) = std::env::var_os("COMMANDER_DEVICE_SNAPSHOT_DIR") else {
+    let Some(directory) = std::env::var_os("COMMANDER_DEVICE_SNAPSHOT_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("COMMANDER_TEST_ARTIFACTS")
+                .map(|directory| std::path::PathBuf::from(directory).join("snapshots"))
+        })
+    else {
         return;
     };
     let deadline = Instant::now() + Duration::from_millis(180);
@@ -346,6 +458,6 @@ fn snapshot(app: &relm4::Controller<AppModel>, name: &str) {
         .renderer()
         .unwrap()
         .render_texture(&node, None)
-        .save_to_png(std::path::Path::new(&directory).join(format!("{name}.png")))
+        .save_to_png(directory.join(format!("{name}.png")))
         .unwrap();
 }

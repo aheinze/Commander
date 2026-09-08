@@ -16,7 +16,7 @@ pub enum KeymapProfile {
     Modern,
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, Eq, PartialEq)]
 pub struct KeymapOverrides {
     #[serde(default)]
     pub classic: BTreeMap<String, Vec<String>>,
@@ -88,6 +88,7 @@ pub enum CommandId {
     NewDirectory,
     Trash,
     DeletePermanent,
+    SecureDelete,
     Undo,
     Redo,
     RecursiveSearch,
@@ -96,6 +97,7 @@ pub enum CommandId {
     Permissions,
     CreateArchive,
     ExtractArchive,
+    BrowseArchive,
     ConvertImage,
     PdfTools,
     ToggleTerminal,
@@ -124,6 +126,9 @@ pub enum CommandId {
     SortByType,
     ToggleSortDirection,
     CompareDirectories,
+    FindDuplicates,
+    CompareFiles,
+    EditArchive,
 }
 
 impl CommandId {
@@ -192,6 +197,7 @@ impl CommandId {
             Self::NewDirectory => "new-directory",
             Self::Trash => "trash",
             Self::DeletePermanent => "delete-permanent",
+            Self::SecureDelete => "secure-delete",
             Self::Undo => "undo",
             Self::Redo => "redo",
             Self::RecursiveSearch => "recursive-search",
@@ -200,6 +206,7 @@ impl CommandId {
             Self::Permissions => "permissions",
             Self::CreateArchive => "create-archive",
             Self::ExtractArchive => "extract-archive",
+            Self::BrowseArchive => "browse-archive",
             Self::ConvertImage => "convert-image",
             Self::PdfTools => "pdf-tools",
             Self::ToggleTerminal => "toggle-terminal",
@@ -227,6 +234,9 @@ impl CommandId {
             Self::SortByModified => "sort-by-modified",
             Self::SortByType => "sort-by-type",
             Self::ToggleSortDirection => "toggle-sort-direction",
+            Self::FindDuplicates => "find-duplicates",
+            Self::CompareFiles => "compare-files",
+            Self::EditArchive => "edit-archive",
             Self::CompareDirectories => "compare-directories",
         }
     }
@@ -322,6 +332,7 @@ pub const COMMANDS: &[CommandDefinition] = &[
     command(CommandId::NewDirectory, "New directory", true),
     command(CommandId::Trash, "Move to trash", true),
     command(CommandId::DeletePermanent, "Delete permanently", true),
+    command(CommandId::SecureDelete, "Secure delete files…", true),
     command(CommandId::Undo, "Undo last file operation", true),
     command(CommandId::Redo, "Redo last file operation", true),
     command(CommandId::RecursiveSearch, "Search file contents", true),
@@ -330,6 +341,7 @@ pub const COMMANDS: &[CommandDefinition] = &[
     command(CommandId::Permissions, "Edit permissions", true),
     command(CommandId::CreateArchive, "Create archive", true),
     command(CommandId::ExtractArchive, "Extract archive", true),
+    command(CommandId::BrowseArchive, "Browse archive", true),
     command(CommandId::ConvertImage, "Convert image", true),
     command(CommandId::PdfTools, "PDF tools", true),
     command(CommandId::ToggleTerminal, "Toggle terminal", true),
@@ -369,6 +381,9 @@ pub const COMMANDS: &[CommandDefinition] = &[
         "Reverse sort direction",
         true,
     ),
+    command(CommandId::FindDuplicates, "Find duplicate files", true),
+    command(CommandId::CompareFiles, "Compare files by contents", true),
+    command(CommandId::EditArchive, "Edit archive contents", true),
     command(CommandId::CompareDirectories, "Compare directories", true),
 ];
 
@@ -393,6 +408,7 @@ pub struct Keymap {
 
 struct KeymapState {
     profile: KeymapProfile,
+    overrides: KeymapOverrides,
     source: KeymapOverrides,
     bindings: HashMap<CommandId, Vec<(KeyStroke, String)>>,
 }
@@ -402,10 +418,11 @@ impl Keymap {
     pub fn new(profile: KeymapProfile, overrides: KeymapOverrides) -> Self {
         let mut source: KeymapOverrides =
             toml_edit::de::from_str(DEFAULT_KEYMAPS).expect("bundled keymaps.toml must be valid");
-        source.classic.extend(overrides.classic);
-        source.modern.extend(overrides.modern);
+        source.classic.extend(overrides.classic.clone());
+        source.modern.extend(overrides.modern.clone());
         let state = KeymapState {
             profile,
+            overrides,
             source,
             bindings: HashMap::new(),
         };
@@ -485,6 +502,62 @@ impl Keymap {
             bindings.insert(definition.id, parsed);
         }
         state.bindings = bindings;
+    }
+
+    pub fn overrides(&self) -> KeymapOverrides {
+        self.inner.borrow().overrides.clone()
+    }
+
+    pub fn configure(&self, profile: KeymapProfile, overrides: KeymapOverrides) {
+        let replacement = Self::new(profile, overrides);
+        std::mem::swap(
+            &mut *self.inner.borrow_mut(),
+            &mut *replacement.inner.borrow_mut(),
+        );
+    }
+
+    pub fn accelerators(&self, command: CommandId) -> Vec<String> {
+        let state = self.inner.borrow();
+        let source = match state.profile {
+            KeymapProfile::Classic => &state.source.classic,
+            KeymapProfile::Modern => &state.source.modern,
+        };
+        source.get(command.as_str()).cloned().unwrap_or_default()
+    }
+
+    /// Assign a shortcut and remove only that stroke from conflicting commands.
+    pub fn assign(&self, command: CommandId, accelerator: Option<&str>) {
+        let mut overrides = self.overrides();
+        let source = match self.profile() {
+            KeymapProfile::Classic => &mut overrides.classic,
+            KeymapProfile::Modern => &mut overrides.modern,
+        };
+        if let Some((key, modifiers)) = accelerator.and_then(gtk::accelerator_parse) {
+            let stroke = normalized_stroke(key, modifiers);
+            for definition in COMMANDS {
+                if definition.id == command {
+                    continue;
+                }
+                let previous = self.accelerators(definition.id);
+                let retained: Vec<_> = previous
+                    .iter()
+                    .filter(|value| {
+                        gtk::accelerator_parse(*value).is_none_or(|(key, modifiers)| {
+                            normalized_stroke(key, modifiers) != stroke
+                        })
+                    })
+                    .cloned()
+                    .collect();
+                if retained != previous {
+                    source.insert(definition.id.as_str().to_owned(), retained);
+                }
+            }
+        }
+        source.insert(
+            command.as_str().to_owned(),
+            accelerator.into_iter().map(str::to_owned).collect(),
+        );
+        self.configure(self.profile(), overrides);
     }
 }
 

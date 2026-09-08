@@ -250,7 +250,9 @@ fn gtk_breadcrumbs_navigate_exactly_and_preserve_location_edits() {
     assert!(
         current_bounds.x() >= 0.0
             && current_bounds.x() + current_bounds.width()
-                <= pane.breadcrumb_stack.width() as f32 + 1.0
+                <= pane.breadcrumb_stack.width() as f32 + 1.0,
+        "Current folder bounds {current_bounds:?} exceed breadcrumb width {}",
+        pane.breadcrumb_stack.width()
     );
     assert!(overflow_bounds.x() >= 0.0 && pane.breadcrumb_overflow.is_mapped());
     drop(widgets);

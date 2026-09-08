@@ -247,17 +247,12 @@ fn exercise_large_results_and_cancellation(app: &relm4::Controller<AppModel>, ta
             "long filenames must not widen the dialog"
         );
         assert!(widgets.search.status.text().contains("10000 results"));
+        assert_eq!(widgets.search.status.text(), "10000 results");
         assert!(
-            widgets
-                .search
-                .status
-                .text()
-                .contains("2 items could not be searched")
-        );
-        assert!(widgets.search.status.text().contains("narrow your search"));
-        assert_eq!(
-            widgets.search.status.tooltip_text().as_deref(),
-            Some("A private folder could not be read")
+            notifications::test_messages()
+                .iter()
+                .any(|message| message.contains("narrow your search")
+                    && message.contains("A private folder could not be read"))
         );
     }
     snapshot_search(app, "search-large-results");

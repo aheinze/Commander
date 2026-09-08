@@ -108,6 +108,10 @@ impl AppModel {
         if !matches!(operation.state, JobState::Cancelled | JobState::Failed) {
             return;
         }
+        if matches!(operation.retry, OperationRetry::SecureDelete { .. }) {
+            self.pane_mut(self.active_pane).error = Some("Secure deletion requires a new review. Select the remaining files and choose Secure delete again.".into());
+            return;
+        }
         let retry = operation.retry.clone();
         self.operations.remove(&id);
         let transfer = TransferOptions {
@@ -117,6 +121,7 @@ impl AppModel {
             parallel: self.parallel_transfers,
         };
         let (pane, kind, handle, history) = match &retry {
+            OperationRetry::SecureDelete { .. } => return,
             OperationRetry::Copy {
                 pane,
                 sources,
@@ -513,6 +518,11 @@ impl AppModel {
     }
 
     pub(super) fn operation_sources(&self, pane: PaneId) -> Vec<VPath> {
+        if let Some(target) = &self.folder_action_target
+            && target.pane == pane
+        {
+            return vec![target.path.clone()];
+        }
         let state = self.pane(pane);
         if state.view_mode == PaneViewMode::Columns {
             let selected = state.selected_miller_sources();

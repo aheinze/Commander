@@ -3,6 +3,8 @@
 use super::*;
 
 mod menu;
+mod tabs;
+pub(super) use tabs::{TabFolderTarget, install_tab_context_menu};
 #[cfg(test)]
 mod tests;
 
@@ -201,7 +203,22 @@ pub(super) fn context_menu_tool_row(
     (button, format!("{label} custom tool").to_lowercase())
 }
 
-/// Builds the shared full-width action row used by file and sidebar context menus.
+/// A compact action menu using the same container and row styling as file menus.
+pub(super) fn context_action_menu() -> (gtk::Popover, gtk::Box) {
+    let menu = gtk::Popover::new();
+    menu.add_css_class("file-context-menu");
+    menu.set_autohide(true);
+    menu.set_has_arrow(false);
+    let actions = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    actions.set_margin_top(6);
+    actions.set_margin_bottom(6);
+    actions.set_margin_start(6);
+    actions.set_margin_end(6);
+    menu.set_child(Some(&actions));
+    (menu, actions)
+}
+
+/// Builds the shared full-width action row used by application context menus.
 pub(super) fn context_menu_item_button(
     label: &str,
     icon: &str,

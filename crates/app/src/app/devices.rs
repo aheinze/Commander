@@ -27,6 +27,7 @@ struct DeviceEntry {
     key: String,
     name: String,
     root: Option<VPath>,
+    uri: Option<String>,
     remote: bool,
     removal: Option<Removal>,
     removal_name: String,
@@ -59,7 +60,39 @@ pub(super) struct DeviceState {
     notice: Option<String>,
 }
 
+pub(super) struct RemoteMount {
+    pub key: String,
+    pub destination: VPath,
+    pub removable: bool,
+    pub busy: bool,
+}
+
 impl DeviceState {
+    pub(super) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    pub(super) fn mounted_remote(&self, uri: &str) -> Option<RemoteMount> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.remote)
+            .filter_map(|entry| {
+                let relative = remote::relative_mount_path(entry.uri.as_deref()?, uri)?;
+                let root = entry.root.as_ref()?;
+                Some((
+                    relative.components().count(),
+                    RemoteMount {
+                        key: entry.key.clone(),
+                        destination: VPath::from(root.as_path().join(relative)),
+                        removable: entry.removal.is_some(),
+                        busy: self.busy.is_some(),
+                    },
+                ))
+            })
+            .min_by_key(|(distance, _)| *distance)
+            .map(|(_, mount)| mount)
+    }
+
     pub(super) fn new() -> Self {
         let backend: Rc<dyn DeviceBackend> = Rc::new(GioDevices);
         Self {
@@ -159,6 +192,7 @@ impl Target {
                 .mount()
                 .and_then(|mount| mount.root().path())
                 .map(VPath::from),
+            uri: self.mount().map(|mount| mount.root().uri().to_string()),
             remote,
             removal: removal.as_ref().map(RemoveTarget::kind),
             removal_name,
@@ -361,9 +395,9 @@ fn operation_uses_roots(retry: &OperationRetry, roots: &[VPath]) -> bool {
             destination,
             ..
         } => (sources, Some(destination)),
-        OperationRetry::Trash { sources, .. } | OperationRetry::Delete { sources, .. } => {
-            (sources, None)
-        }
+        OperationRetry::Trash { sources, .. }
+        | OperationRetry::Delete { sources, .. }
+        | OperationRetry::SecureDelete { sources } => (sources, None),
     };
     sources.iter().any(|path| under_roots(path, roots))
         || destination.is_some_and(|path| under_roots(path, roots))
@@ -383,6 +417,7 @@ impl AppModel {
         let prepared = match prepared {
             Ok(action) => action,
             Err(error) => {
+                notifications::error(&error);
                 self.devices.notice = Some(error);
                 self.devices.refresh();
                 return;
@@ -401,10 +436,12 @@ impl AppModel {
                 "Finish or cancel the file operation using this device before removing it."
                     .to_owned(),
             );
+            notifications::error(self.devices.notice.as_deref().unwrap());
             self.devices.refresh();
             return;
         }
         self.devices.busy = Some(key.to_owned());
+        notifications::info(&prepared.progress);
         self.devices.notice = Some(prepared.progress);
         self.devices.refresh();
         let input = sender.input_sender().clone();
@@ -426,12 +463,14 @@ impl AppModel {
                 self.navigate(self.active_pane, path, sender);
             }
             Ok(DeviceOutcome::Removed { roots, message }) => {
+                notifications::success(&message);
                 self.leave_device_paths(&roots, sender);
                 self.push_operation_log(message.clone());
                 self.devices.notice = Some(message);
             }
             Err(error) => {
                 self.push_operation_log(error.clone());
+                notifications::error(&error);
                 self.devices.notice = Some(error);
             }
         }
@@ -478,6 +517,7 @@ pub(super) struct DeviceSidebar {
     monitor: gio::VolumeMonitor,
     signals: Vec<glib::SignalHandlerId>,
     rendered: Option<u64>,
+    rendered_remotes: Vec<String>,
 }
 
 impl Drop for DeviceSidebar {
@@ -522,28 +562,39 @@ impl DeviceSidebar {
             monitor,
             signals,
             rendered: None,
+            rendered_remotes: Vec::new(),
         }
     }
 
     pub(super) fn render(
         &mut self,
         state: &DeviceState,
+        remotes: &[String],
         sender: &ComponentSender<AppModel>,
         file_drag_ui: &Rc<FileDragUiState>,
     ) -> bool {
-        if self.rendered == Some(state.revision) {
+        if self.rendered == Some(state.revision) && self.rendered_remotes == remotes {
             return false;
         }
         self.rendered = Some(state.revision);
+        self.rendered_remotes = remotes.to_vec();
         self.rows.clear();
         for container in [&self.devices, &self.mounts] {
             while let Some(child) = container.first_child() {
+                super::widgets::remove_sidebar_popovers(&child);
                 container.remove(&child);
             }
         }
-        self.devices
-            .append(&super::sidebar::sidebar_heading("Devices"));
         for entry in &state.entries {
+            if entry.remote
+                && remotes.iter().any(|uri| {
+                    state
+                        .mounted_remote(uri)
+                        .is_some_and(|mount| mount.key == entry.key)
+                })
+            {
+                continue;
+            }
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
             let button = sidebar_button(
                 &entry.name,
@@ -574,6 +625,44 @@ impl DeviceSidebar {
                 let _ = input.send(AppMsg::OpenDevice(key.clone()));
             });
             row.append(&button);
+            let (menu, actions) = super::sidebar::menus::new(&button, &entry.name);
+            if let Some(path) = &entry.root {
+                super::sidebar::menus::location_actions(
+                    &menu,
+                    &actions,
+                    path,
+                    true,
+                    sender.input_sender(),
+                );
+            } else {
+                let key = entry.key.clone();
+                super::sidebar::menus::message(
+                    &menu,
+                    &actions,
+                    "Mount and open",
+                    "commander-folder-open-symbolic",
+                    sender.input_sender(),
+                    move || AppMsg::OpenDevice(key.clone()),
+                );
+            }
+            if let Some(removal) = entry.removal {
+                super::sidebar::menus::separator(&actions);
+                let key = entry.key.clone();
+                super::sidebar::menus::message(
+                    &menu,
+                    &actions,
+                    if entry.remote {
+                        "Disconnect"
+                    } else {
+                        removal.label()
+                    },
+                    "commander-eject-symbolic",
+                    sender.input_sender(),
+                    move || AppMsg::RemoveDevice(key.clone()),
+                );
+            }
+            super::sidebar::menus::install(&button, &menu);
+            actions.set_sensitive(state.busy.is_none());
             if state.busy.as_deref() == Some(&entry.key) {
                 let spinner = gtk::Spinner::new();
                 spinner.set_size_request(28, 28);
@@ -604,21 +693,14 @@ impl DeviceSidebar {
             (&self.devices, false, "No devices connected"),
             (&self.mounts, true, "No mounted locations"),
         ] {
-            if !state.entries.iter().any(|entry| entry.remote == remote) {
+            if !state.entries.iter().any(|entry| entry.remote == remote)
+                && (!remote || remotes.is_empty())
+            {
                 let empty = gtk::Label::new(Some(message));
                 empty.add_css_class("sidebar-empty");
                 empty.set_xalign(0.0);
                 container.append(&empty);
             }
-        }
-        if let Some(notice) = &state.notice {
-            let label = gtk::Label::new(Some(notice));
-            label.add_css_class("sidebar-device-status");
-            label.set_xalign(0.0);
-            label.set_wrap(true);
-            label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-            label.set_max_width_chars(25);
-            self.devices.append(&label);
         }
         true
     }

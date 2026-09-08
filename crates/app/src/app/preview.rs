@@ -2,6 +2,10 @@
 
 use super::*;
 
+mod markdown;
+#[cfg(test)]
+mod svg_tests;
+mod table;
 mod text;
 
 pub(super) struct QuickLookWidgets {
@@ -12,6 +16,8 @@ pub(super) struct QuickLookWidgets {
     pub(super) picture: gtk::Picture,
     pub(super) video: gtk::Video,
     pub(super) text_view: gtk::TextView,
+    markdown_view: markdown::MarkdownView,
+    table_view: table::TableView,
     pub(super) status: gtk::Label,
     pub(super) title: gtk::Label,
     pub(super) detail: gtk::Label,
@@ -44,7 +50,7 @@ impl QuickLookWidgets {
         detail.set_ellipsize(gtk::pango::EllipsizeMode::End);
         heading.append(&title);
         heading.append(&detail);
-        let header = adw::HeaderBar::new();
+        let header = chrome::dialog_header(&dialog);
         header.set_title_widget(Some(&heading));
 
         let stack = gtk::Stack::new();
@@ -75,6 +81,10 @@ impl QuickLookWidgets {
             .child(&text_view)
             .build();
         stack.add_named(&text_scroll, Some("text"));
+        let markdown_view = markdown::MarkdownView::new();
+        stack.add_named(&markdown_view.root, Some("markdown"));
+        let table_view = table::TableView::new();
+        stack.add_named(&table_view.root, Some("table"));
         let loading = gtk::Spinner::new();
         loading.set_spinning(true);
         stack.add_named(&loading, Some("loading"));
@@ -104,7 +114,16 @@ impl QuickLookWidgets {
         let keys = gtk::EventControllerKey::new();
         {
             let input = sender.input_sender().clone();
+            let table_root = table_view.root.clone();
             keys.connect_key_pressed(move |_, key, _, _| {
+                if table_root.is_mapped()
+                    && table_root
+                        .root()
+                        .and_then(|root| root.focus())
+                        .is_some_and(|focus| focus.is_ancestor(&table_root))
+                {
+                    return glib::Propagation::Proceed;
+                }
                 if key == gdk::Key::space {
                     let _ = input.send(AppMsg::ToggleQuickLook);
                     return glib::Propagation::Stop;
@@ -130,6 +149,8 @@ impl QuickLookWidgets {
             picture,
             video,
             text_view,
+            markdown_view,
+            table_view,
             status,
             title,
             detail,
@@ -155,6 +176,7 @@ impl QuickLookWidgets {
             return;
         }
         self.rendered_preview.set(key);
+        self.table_view.clear();
         self.title.set_label(
             state
                 .path
@@ -169,7 +191,8 @@ impl QuickLookWidgets {
             return;
         }
         if let Some(error) = &state.error {
-            self.status.set_label(error);
+            notifications::error(error);
+            self.status.set_label("");
             self.stack.set_visible_child_name("status");
             return;
         }
@@ -183,6 +206,25 @@ impl QuickLookWidgets {
             format_size(preview.metadata.size, preview.metadata.kind)
         ));
         match &preview.payload {
+            PreviewPayload::Table(document) => {
+                pause_video(&self.video);
+                self.table_view.render(document);
+                self.detail.set_label("Read-only table · Esc to close");
+                self.stack.set_visible_child_name("table");
+            }
+            PreviewPayload::Markdown {
+                document,
+                truncated,
+            } => {
+                pause_video(&self.video);
+                self.markdown_view
+                    .render(document, &preview.path, *truncated);
+                self.detail.set_label(&format!(
+                    "Markdown{} · Space to close · ←/→ to browse",
+                    if *truncated { " · truncated" } else { "" }
+                ));
+                self.stack.set_visible_child_name("markdown");
+            }
             PreviewPayload::Directory => {
                 pause_video(&self.video);
                 crate::icons::set_file_icon(
@@ -200,7 +242,8 @@ impl QuickLookWidgets {
                 pause_video(&self.video);
                 let (Ok(width), Ok(height)) = (i32::try_from(*width), i32::try_from(*height))
                 else {
-                    self.status.set_label("Image dimensions are too large");
+                    notifications::error("Image dimensions are too large to preview");
+                    self.status.set_label("");
                     self.stack.set_visible_child_name("status");
                     return;
                 };
@@ -230,7 +273,8 @@ impl QuickLookWidgets {
                     ));
                     self.stack.set_visible_child_name("image");
                 } else {
-                    self.status.set_label("PDF page is too large to preview");
+                    notifications::error("PDF page is too large to preview");
+                    self.status.set_label("");
                     self.stack.set_visible_child_name("status");
                 }
             }
@@ -278,6 +322,8 @@ pub(super) struct PreviewWidgets {
     pub(super) pdf_picture: gtk::Picture,
     pub(super) video: gtk::Video,
     pub(super) text_view: gtk::TextView,
+    markdown_view: markdown::MarkdownView,
+    table_view: table::TableView,
     pub(super) content_status: gtk::Label,
     pub(super) pdf_controls: gtk::Box,
     pub(super) pdf_previous: gtk::Button,
@@ -415,6 +461,10 @@ impl PreviewWidgets {
             .child(&text_view)
             .build();
         content_stack.add_named(&text_scroll, Some("text"));
+        let markdown_view = markdown::MarkdownView::new();
+        content_stack.add_named(&markdown_view.root, Some("markdown"));
+        let table_view = table::TableView::new();
+        content_stack.add_named(&table_view.root, Some("table"));
         let loading = gtk::Spinner::new();
         loading.set_spinning(true);
         content_stack.add_named(&loading, Some("loading"));
@@ -692,6 +742,8 @@ impl PreviewWidgets {
             pdf_picture,
             video,
             text_view,
+            markdown_view,
+            table_view,
             content_status,
             pdf_controls,
             pdf_previous,
@@ -863,24 +915,23 @@ impl PreviewWidgets {
     }
 
     pub(super) fn render_preview_metadata(&self, preview: &Preview, model: &AppModel) {
+        let display_path = model.archive_mounts.display(&preview.path);
         self.identity.set_visible(true);
         self.set_sections_visible(true, true, true, true);
         self.name.set_label(
-            preview
-                .path
+            display_path
                 .file_name()
                 .and_then(OsStr::to_str)
                 .unwrap_or("Item"),
         );
         let type_label = preview_type_label(preview);
         self.meta.set_label(&type_label);
-        let parent = preview
-            .path
+        let parent = display_path
             .parent()
-            .map_or_else(|| preview.path.to_string(), |path| path.to_string());
+            .map_or_else(|| display_path.to_string(), |path| path.to_string());
         self.path_value.set_label(&parent);
         self.path_value
-            .set_tooltip_text(Some(&preview.path.to_string()));
+            .set_tooltip_text(Some(&display_path.to_string()));
         self.size_value
             .set_label(&if preview.metadata.kind == EntryKind::Directory {
                 if model.folder_measure.loading {
@@ -933,7 +984,8 @@ impl PreviewWidgets {
             .path
             .file_name()
             .is_some_and(|name| name.as_encoded_bytes().starts_with(b"."));
-        let read_only = preview.metadata.mode.is_some_and(|mode| mode & 0o222 == 0);
+        let read_only = model.is_archive_browse_path(&preview.path)
+            || preview.metadata.mode.is_some_and(|mode| mode & 0o222 == 0);
         self.hidden_value
             .set_label(if hidden { "Yes" } else { "No" });
         self.read_only_value
@@ -972,6 +1024,24 @@ impl PreviewWidgets {
 
     pub(super) fn render_preview_details(&self, preview: &Preview) {
         let details = match &preview.payload {
+            PreviewPayload::Table(document) => Some((
+                format!("{} spreadsheet", document.format),
+                if document.sheets.len() == 1 {
+                    let sheet = &document.sheets[0];
+                    format!("{} rows × {} columns", sheet.rows.len(), sheet.columns)
+                } else {
+                    format!("{} worksheets", document.sheets.len())
+                },
+            )),
+            PreviewPayload::Markdown { truncated, .. } => Some((
+                "Markdown document".to_owned(),
+                if *truncated {
+                    "Preview truncated"
+                } else {
+                    "Formatted preview"
+                }
+                .to_owned(),
+            )),
             PreviewPayload::Image { width, height, .. } => {
                 Some(("Image".to_owned(), format!("{width} × {height}")))
             }
@@ -1096,6 +1166,7 @@ impl PreviewWidgets {
         }
         self.rendered_preview.set(key);
         self.pdf_controls.set_visible(false);
+        self.table_view.clear();
         if selected_count > 1 {
             pause_video(&self.video);
             self.content_stack.set_visible_child_name("multi");
@@ -1106,7 +1177,8 @@ impl PreviewWidgets {
             return;
         }
         if let Some(error) = &state.error {
-            self.content_status.set_label(error);
+            notifications::error(error);
+            self.content_status.set_label("");
             self.content_stack.set_visible_child_name("status");
             return;
         }
@@ -1115,6 +1187,20 @@ impl PreviewWidgets {
             return;
         };
         match &preview.payload {
+            PreviewPayload::Table(document) => {
+                pause_video(&self.video);
+                self.table_view.render(document);
+                self.content_stack.set_visible_child_name("table");
+            }
+            PreviewPayload::Markdown {
+                document,
+                truncated,
+            } => {
+                pause_video(&self.video);
+                self.markdown_view
+                    .render(document, &preview.path, *truncated);
+                self.content_stack.set_visible_child_name("markdown");
+            }
             PreviewPayload::Directory => {
                 pause_video(&self.video);
                 crate::icons::set_file_icon(
@@ -1131,14 +1217,14 @@ impl PreviewWidgets {
             } => {
                 pause_video(&self.video);
                 let Ok(width_i32) = i32::try_from(*width) else {
-                    self.content_status
-                        .set_label("Image is too wide to preview");
+                    notifications::error("Image is too wide to preview");
+                    self.content_status.set_label("");
                     self.content_stack.set_visible_child_name("status");
                     return;
                 };
                 let Ok(height_i32) = i32::try_from(*height) else {
-                    self.content_status
-                        .set_label("Image is too tall to preview");
+                    notifications::error("Image is too tall to preview");
+                    self.content_status.set_label("");
                     self.content_stack.set_visible_child_name("status");
                     return;
                 };
@@ -1167,8 +1253,8 @@ impl PreviewWidgets {
                     let (Ok(width_request), Ok(height_request)) =
                         (i32::try_from(*width), i32::try_from(*height))
                     else {
-                        self.content_status
-                            .set_label("PDF page is too large to preview");
+                        notifications::error("PDF page is too large to preview");
+                        self.content_status.set_label("");
                         self.content_stack.set_visible_child_name("status");
                         return;
                     };
@@ -1186,8 +1272,8 @@ impl PreviewWidgets {
                     self.pdf_next.set_sensitive(*page_number < *page_count);
                     self.pdf_controls.set_visible(true);
                 } else {
-                    self.content_status
-                        .set_label("PDF page is too large to preview");
+                    notifications::error("PDF page is too large to preview");
+                    self.content_status.set_label("");
                     self.content_stack.set_visible_child_name("status");
                 }
             }

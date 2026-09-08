@@ -39,13 +39,21 @@ impl AlertSheet {
         root.set_size_request(400, -1);
         let content = gtk::Box::new(gtk::Orientation::Vertical, 6);
         content.add_css_class("alert-sheet-content");
+        let heading_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let heading_space = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        heading_space.set_hexpand(true);
         if let Some(heading) = heading {
             let label = gtk::Label::new(Some(heading));
             label.set_xalign(0.0);
             label.set_wrap(true);
             label.add_css_class("alert-heading");
-            content.append(&label);
+            heading_space.append(&label);
         }
+        heading_row.append(&heading_space);
+        let close = chrome::dialog_close_button(&dialog);
+        close.set_valign(gtk::Align::Start);
+        heading_row.append(&close);
+        content.append(&heading_row);
         if let Some(body) = body {
             let label = gtk::Label::new(Some(body));
             label.set_xalign(0.0);

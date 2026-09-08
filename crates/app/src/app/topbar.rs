@@ -455,6 +455,44 @@ impl TopBarWidgets {
             }
         });
         more_items.append(&recovery);
+        section(&more_items, "File tools");
+        for (label, icon, command) in [
+            (
+                "Batch rename…",
+                "commander-file-pen-line-symbolic",
+                CommandId::BatchRename,
+            ),
+            (
+                "Find duplicate files…",
+                "commander-search-symbolic",
+                CommandId::FindDuplicates,
+            ),
+            (
+                "Compare files…",
+                "commander-file-symbolic",
+                CommandId::CompareFiles,
+            ),
+            (
+                "Compare and sync folders…",
+                "commander-folder-symbolic",
+                CommandId::CompareDirectories,
+            ),
+            (
+                "Edit archive contents…",
+                "commander-archive-symbolic",
+                CommandId::EditArchive,
+            ),
+        ] {
+            command_row(
+                &more_items,
+                &more_popover,
+                &mut commands,
+                sender.input_sender(),
+                label,
+                icon,
+                command,
+            );
+        }
         section(&more_items, "Application");
         command_row(
             &more_items,
@@ -580,7 +618,8 @@ impl TopBarWidgets {
         self.window_controls.set_visible(!model.sidebar_visible);
         self.apply_layout(available);
         let state = model.pane(model.active_pane);
-        let path = state.current_directory();
+        let display_path = model.archive_mounts.display(state.current_directory());
+        let path = &display_path;
         self.filter_pane.set(model.active_pane);
         let filter = (model.active_pane, state.filter_query.clone());
         if self.rendered_filter.as_ref() != Some(&filter) {
@@ -686,7 +725,8 @@ impl TopBarWidgets {
         }
         let has_items =
             !state.selection.is_empty() || model.focused_item(model.active_pane).is_some();
-        let writable = !model.is_archive_browse_path(path) && !model.history_busy;
+        let writable =
+            !model.is_archive_browse_path(state.current_directory()) && !model.history_busy;
         for control in &self.commands {
             let binding = model.keymap.binding_label(control.command);
             let tip = if binding.is_empty() {

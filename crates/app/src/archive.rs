@@ -15,6 +15,7 @@ use tar::{Archive as TarArchive, Builder as TarBuilder, Header as TarHeader};
 use zip::write::FileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+pub mod edit;
 mod progress;
 pub use progress::{ArchiveProgress, ArchiveTask};
 
@@ -238,9 +239,9 @@ fn create_zip(
     Ok(count)
 }
 
-fn add_zip_path(
+fn add_zip_path<W: Write + io::Seek>(
     vfs: &dyn Vfs,
-    archive: &mut ZipWriter<Box<dyn dualpane_vfs::WriteSeek>>,
+    archive: &mut ZipWriter<W>,
     source: &VPath,
     archive_path: PathBuf,
     options: FileOptions,

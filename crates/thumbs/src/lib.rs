@@ -2,7 +2,10 @@
 
 //! Cancellable native thumbnail and preview loading.
 
+pub mod markdown;
+mod svg;
 mod syntax;
+pub mod table;
 
 pub use syntax::{SyntaxKind, SyntaxSpan};
 
@@ -259,6 +262,11 @@ pub fn load_thumbnail(
 #[derive(Clone, Debug)]
 pub enum PreviewPayload {
     Directory,
+    Table(table::TableDocument),
+    Markdown {
+        document: markdown::MarkdownDocument,
+        truncated: bool,
+    },
     Image {
         rgba: Vec<u8>,
         width: u32,
@@ -306,6 +314,10 @@ pub enum PreviewError {
     Io(#[from] std::io::Error),
     #[error("could not render PDF: {0}")]
     Pdf(String),
+    #[error("could not render SVG: {0}")]
+    Svg(String),
+    #[error("could not preview spreadsheet: {0}")]
+    Table(String),
 }
 
 /// Loads metadata and decodes bounded preview content.
@@ -321,6 +333,23 @@ pub fn load_preview(
     cancel.check().map_err(|_| PreviewError::Cancelled)?;
     let payload = if metadata.kind == EntryKind::Directory {
         PreviewPayload::Directory
+    } else if metadata.kind == EntryKind::File && table::supports(path.as_path()) {
+        PreviewPayload::Table(table::load(vfs, &path, cancel)?)
+    } else if metadata.kind == EntryKind::File && markdown::is_markdown(path.as_path()) {
+        match read_text(vfs, &path, cancel)? {
+            Some((content, truncated)) => {
+                let mut document = markdown::MarkdownDocument::parse(&content, cancel)?;
+                document.load_images(vfs, &path, cancel)?;
+                let truncated = truncated || document.truncated;
+                PreviewPayload::Markdown {
+                    document,
+                    truncated,
+                }
+            }
+            None => PreviewPayload::Unsupported,
+        }
+    } else if metadata.kind == EntryKind::File && svg::is_svg(path.as_path()) {
+        svg::load(vfs, &path, cancel)?
     } else if metadata.kind == EntryKind::File && is_image(path.as_path().extension()) {
         load_image(vfs, &path, cancel)?
     } else if metadata.kind == EntryKind::File && is_pdf(path.as_path().extension()) {
@@ -494,6 +523,24 @@ fn load_text(
     text_syntax: syntax::TextSyntax,
     cancel: &CancelToken,
 ) -> Result<PreviewPayload, PreviewError> {
+    let Some((content, truncated)) = read_text(vfs, path, cancel)? else {
+        return Ok(PreviewPayload::Unsupported);
+    };
+    let highlights =
+        syntax::highlight(&content, text_syntax, cancel).map_err(|_| PreviewError::Cancelled)?;
+    Ok(PreviewPayload::Text {
+        content,
+        language: text_syntax.language,
+        truncated,
+        highlights,
+    })
+}
+
+fn read_text(
+    vfs: &dyn Vfs,
+    path: &VPath,
+    cancel: &CancelToken,
+) -> Result<Option<(String, bool)>, PreviewError> {
     let mut reader = vfs.open_read(path)?;
     let mut bytes = Vec::with_capacity(MAX_TEXT_BYTES.min(64 * 1_024));
     reader
@@ -504,17 +551,10 @@ fn load_text(
     let truncated = bytes.len() > MAX_TEXT_BYTES;
     bytes.truncate(MAX_TEXT_BYTES);
     if bytes.iter().take(8_192).any(|byte| *byte == 0) {
-        return Ok(PreviewPayload::Unsupported);
+        return Ok(None);
     }
     let content = String::from_utf8_lossy(&bytes).into_owned();
-    let highlights =
-        syntax::highlight(&content, text_syntax, cancel).map_err(|_| PreviewError::Cancelled)?;
-    Ok(PreviewPayload::Text {
-        content,
-        language: text_syntax.language,
-        truncated,
-        highlights,
-    })
+    Ok(Some((content, truncated)))
 }
 
 fn is_image(extension: Option<&OsStr>) -> bool {

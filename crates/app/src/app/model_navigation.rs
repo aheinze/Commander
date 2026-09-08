@@ -142,8 +142,16 @@ impl AppModel {
     }
 
     pub(super) fn start_listing(&mut self, pane: PaneId, sender: &ComponentSender<Self>) {
+        self.pane_mut(pane).archive_browse.cancel();
+        let current = self.pane(pane).active().path.clone();
+        let resolved = self.archive_mounts.resolve(&current);
+        if resolved != current {
+            self.replace_archive_location(pane, resolved);
+        }
+        self.pane_mut(pane).git.invalidate();
         self.sync_directory_watches(sender);
         if self.pane(pane).view_mode == PaneViewMode::Columns
+            && !archive_browser::has_archive_component(&current)
             && (self.pane(pane).miller_columns.len() > 1
                 || self
                     .pane(pane)
@@ -279,6 +287,7 @@ impl AppModel {
         restore_branch: bool,
         sender: &ComponentSender<Self>,
     ) {
+        let path = self.archive_mounts.resolve(&path);
         self.active_pane = pane;
         self.focus_active_files();
         self.record_recent(path.clone());
@@ -303,7 +312,7 @@ impl AppModel {
             state.active_mut().navigate(previous);
         }
         state.active_mut().navigate(path);
-        state.reset_directory_view();
+        state.reset_for_folder_entry();
         if !restore_branch {
             // An explicit breadcrumb or location must end at the requested folder.
             if state.miller_columns.len() > 1 {
@@ -363,10 +372,14 @@ impl AppModel {
     }
 
     pub(super) fn record_recent(&mut self, path: VPath) {
-        const RECENT_LIMIT: usize = 12;
+        if !self.workflow.remember_recent {
+            return;
+        }
+        let path = self.archive_mounts.display(&path);
         self.recent.retain(|candidate| candidate != &path);
         self.recent.insert(0, path);
-        self.recent.truncate(RECENT_LIMIT);
+        self.recent
+            .truncate(self.workflow.recent_limit.clamp(5, 100) as usize);
     }
 
     pub(super) fn open_row(&mut self, pane: PaneId, row: u32, sender: &ComponentSender<Self>) {
@@ -399,7 +412,7 @@ impl AppModel {
             self.navigate(pane, target, sender);
             return;
         }
-        if is_archive_path(&target) {
+        if self.workflow.browse_archives && is_archive_path(&target) {
             self.start_archive_browse(pane, target, sender);
             return;
         }
@@ -418,58 +431,6 @@ impl AppModel {
                 }
             },
         );
-    }
-
-    pub(super) fn start_archive_browse(
-        &mut self,
-        pane: PaneId,
-        source: VPath,
-        sender: &ComponentSender<Self>,
-    ) {
-        if let Some(cancel) = self.tool_cancel.take() {
-            cancel.cancel();
-        }
-        let cancel = CancelToken::new();
-        self.tool_cancel = Some(cancel.clone());
-        let vfs = Arc::clone(&self.vfs);
-        let input = sender.input_sender().clone();
-        let worker_source = source.clone();
-        match thread::Builder::new()
-            .name("dualpane-archive-browser".to_owned())
-            .spawn(move || {
-                let result = tempfile::Builder::new()
-                    .prefix("omacommander-archive-")
-                    .tempdir()
-                    .map_err(|error| error.to_string())
-                    .and_then(|directory| {
-                        let destination = VPath::from(directory.path());
-                        extract_archive(
-                            vfs.as_ref(),
-                            &worker_source,
-                            &destination,
-                            &mut ArchiveTask::new(&cancel),
-                        )?;
-                        Ok(directory)
-                    });
-                let _ = input.send(AppMsg::ArchiveBrowseReady {
-                    pane,
-                    source,
-                    result,
-                });
-            }) {
-            Ok(worker) => self.aux_workers.push(worker),
-            Err(error) => {
-                self.tool_cancel = None;
-                self.pane_mut(pane).error =
-                    Some(format!("Could not start archive browser: {error}"));
-            }
-        }
-    }
-
-    pub(super) fn is_archive_browse_path(&self, path: &VPath) -> bool {
-        self.archive_mounts
-            .iter()
-            .any(|(_, directory)| path.as_path().starts_with(directory.path()))
     }
 
     pub(super) fn sync_miller_root(&mut self, pane: PaneId) {
@@ -678,6 +639,13 @@ impl AppModel {
         if generation != self.pane(pane).generation {
             return;
         }
+        if matches!(event, ListingEvent::Failed(_)) {
+            let path = self.pane(pane).active().path.clone();
+            if archive_browser::has_archive_component(&path) {
+                self.start_archive_location(pane, path, true, sender);
+                return;
+            }
+        }
         let shared_complete = match &event {
             ListingEvent::Complete { listing, .. } => self
                 .pane(pane.other())
@@ -745,7 +713,6 @@ impl AppModel {
                 state.error = Some(error.to_string());
             }
         }
-        state.restore_selection();
         let should_filter = state
             .active()
             .listing
@@ -764,6 +731,8 @@ impl AppModel {
             self.start_filter(pane, sender);
         }
         self.sync_miller_root(pane);
+        // Column view needs its new root listing before restoring history selections.
+        self.pane_mut(pane).restore_selection();
         self.pane_mut(pane).reveal_pending_item();
         if pane == self.active_pane {
             self.start_preview(sender);
@@ -847,7 +816,7 @@ impl AppModel {
         state.remember_navigation();
         state.tabs.push(TabState::new(path));
         state.active_tab = state.tabs.len() - 1;
-        state.reset_directory_view();
+        state.reset_for_folder_entry();
         state.tabs_revision = state.tabs_revision.wrapping_add(1);
         self.start_listing(pane, sender);
         self.persist_session();
@@ -998,16 +967,22 @@ impl AppModel {
                 paths: Vec::new(),
                 labels: BTreeMap::new(),
             });
+            self.collapsed_sidebar_groups.remove("favorites");
             self.persist_session();
         }
     }
 
     pub(super) fn on_add_current_to_favorite_group(&mut self, index: usize) {
-        let path = self.pane(self.active_pane).current_directory().to_string();
+        let path = self
+            .archive_mounts
+            .display(self.pane(self.active_pane).current_directory())
+            .to_string();
         if let Some(group) = self.favorite_groups.get_mut(index)
             && !group.paths.contains(&path)
         {
             group.paths.push(path);
+            self.collapsed_sidebar_groups
+                .remove(&sidebar::favorite_group_key(&group.name));
             self.persist_session();
         }
     }
@@ -1050,7 +1025,7 @@ impl AppModel {
 
     pub(super) fn on_connect_remote(&mut self, uri: String, sender: &ComponentSender<Self>) {
         match remote::RemoteConnection::parse(&uri) {
-            Ok(connection) => self.on_connect_remote_with_options(connection, None, sender),
+            Ok(connection) => self.on_connect_remote_with_options(connection, None, None, sender),
             Err(error) => self.pane_mut(self.active_pane).error = Some(error.to_owned()),
         }
     }
@@ -1059,16 +1034,39 @@ impl AppModel {
         &mut self,
         connection: remote::RemoteConnection,
         replacing: Option<String>,
+        name: Option<String>,
         sender: &ComponentSender<Self>,
     ) {
-        if let Some(old) = replacing {
-            self.remote_uris.retain(|uri| *uri != old);
+        if self.save_remote(&connection.uri, replacing.as_deref(), name.as_deref()) {
+            connect_remote_uri(connection, sender);
         }
-        if !self.remote_uris.contains(&connection.uri) {
-            self.remote_uris.push(connection.uri.clone());
+    }
+
+    pub(super) fn save_remote(
+        &mut self,
+        uri: &str,
+        replacing: Option<&str>,
+        name: Option<&str>,
+    ) -> bool {
+        match remote::save_location(
+            &mut self.remote_uris,
+            &mut self.remote_names,
+            uri,
+            replacing,
+            name,
+        ) {
+            Ok(()) => {
+                self.persist_session();
+                if replacing.is_some() {
+                    notifications::success("Remote connection saved");
+                }
+                true
+            }
+            Err(error) => {
+                self.pane_mut(self.active_pane).error = Some(error.to_owned());
+                false
+            }
         }
-        self.persist_session();
-        connect_remote_uri(connection, sender);
     }
 
     pub(super) fn on_remote_connected(

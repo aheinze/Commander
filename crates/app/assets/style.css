@@ -290,7 +290,7 @@ paned > separator:hover {
   margin: 0 4px;
 }
 
-/* Monochrome window actions share the toolbar's flat controls. */
+/* Main-window and dialog close buttons use the same flat control. */
 .window-action {
   min-width: 24px;
   min-height: 24px;
@@ -363,6 +363,21 @@ paned > separator:hover {
   color: @carelo_text;
   background: @carelo_hover;
 }
+
+.sidebar-group-toggle {
+  min-height: 24px;
+  padding: 0 9px;
+  border-radius: 4px;
+  color: @carelo_muted;
+  font-size: 11px;
+  font-weight: 600;
+  background: transparent;
+  box-shadow: none;
+}
+.sidebar-group-toggle:checked { background: transparent; color: @carelo_muted; }
+.sidebar-group-toggle:hover { background: @carelo_hover; color: @carelo_text; }
+.sidebar-group-toggle image { color: @carelo_faint; }
+.favorite-group-heading .sidebar-group-toggle { padding: 0; font-size: 10px; }
 
 .sidebar-row {
   min-height: 32px;
@@ -654,7 +669,8 @@ paned > separator:hover {
   background: @carelo_hover;
 }
 
-.sidebar-device-eject {
+.sidebar-device-eject,
+.sidebar-inline-action {
   min-width: 28px;
   min-height: 28px;
   padding: 0;
@@ -662,9 +678,30 @@ paned > separator:hover {
   color: @carelo_faint;
   background: transparent;
 }
-.sidebar-device-eject image { -gtk-icon-size: 14px; }
-.sidebar-device-eject:hover { color: @carelo_text; background: @carelo_hover; }
+.sidebar-device-eject image,
+.sidebar-inline-action image { -gtk-icon-size: 14px; }
+.sidebar-device-eject:hover,
+.sidebar-inline-action:hover { color: @carelo_text; background: @carelo_hover; }
+.sidebar-remote-row .sidebar-inline-action { opacity: 0; }
+.sidebar-remote-row:hover .sidebar-inline-action,
+.sidebar-remote-row:focus-within .sidebar-inline-action { opacity: 1; }
 .sidebar-device-status { margin: 4px 9px; font-size: 12px; color: @carelo_muted; }
+
+/* Feedback floats over content; native toasts manage queueing and accessible dismissal. */
+.commander-notifications toast {
+  color: @carelo_text;
+  background: @carelo_toolbar;
+  border: 1px solid @carelo_separator;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px alpha(black, 0.22);
+  margin: 12px;
+}
+.notification-content { padding: 4px 0; }
+.notification-content label { font-size: 13px; }
+.notification-error > image { color: #da5b62; }
+.notification-success > image { color: @carelo_accent; }
+.notification-info > image { color: @carelo_muted; }
+.commander-notifications toast button { border-radius: 4px; box-shadow: none; }
 
 .favorite-group-heading {
   min-height: 27px;
@@ -978,6 +1015,10 @@ paned > separator:hover {
   font-weight: 500;
 }
 
+.sidebar-context-menu .context-menu-title {
+  font-weight: 700;
+}
+
 .context-menu-item {
   min-height: 28px;
   padding: 0 8px;
@@ -1169,6 +1210,23 @@ paned > separator:hover {
   color: @carelo_muted;
   font-size: 11px;
   background: @carelo_pane;
+}
+
+.pane-status-action {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 4px;
+  color: @carelo_muted;
+  background: transparent;
+  box-shadow: none;
+}
+.pane-status-action image { -gtk-icon-size: 14px; }
+.pane-status-action:hover { color: @carelo_text; background: @carelo_hover; }
+
+.pane-git-status {
+  margin-left: 6px;
+  margin-right: 4px;
 }
 
 .preview-panel {
@@ -1907,6 +1965,50 @@ dialog.command-palette-dialog sheet {
   color: @carelo_faint;
 }
 
+/* Markdown previews share the native document typography in both preview surfaces. */
+.markdown-content {
+  padding: 18px;
+  color: @carelo_text;
+  background: @carelo_pane;
+  font-family: "Inter", "Cantarell", sans-serif;
+  font-size: 13px;
+}
+.markdown-content label { line-height: 1.5; }
+.markdown-content label link,
+.markdown-content label link:visited { color: mix(@carelo_accent, @carelo_text, 0.45); }
+.markdown-heading { margin-top: 8px; font-weight: 600; }
+.markdown-h1 { font-size: 25px; }
+.markdown-h2 { font-size: 20px; }
+.markdown-h3 { font-size: 17px; }
+.markdown-h4, .markdown-h5, .markdown-h6 { font-size: 14px; }
+.markdown-list { margin-left: 4px; }
+.markdown-list-marker { min-width: 18px; }
+.markdown-quote { padding: 8px 12px; background: alpha(@carelo_text, 0.045); }
+.markdown-code, .markdown-code text {
+  font-family: monospace;
+  font-size: 12px;
+  color: @carelo_text;
+  background: @carelo_control;
+}
+.markdown-code { padding: 12px; }
+.markdown-code-scroll { border-radius: 4px; }
+.markdown-table-cell { padding: 7px 10px; border-bottom: 1px solid @carelo_separator; }
+.markdown-table-heading { font-weight: 600; background: alpha(@carelo_text, 0.045); }
+.markdown-notice { color: @carelo_muted; font-size: 12px; }
+
+/* Spreadsheet previews use the file list's native table and theme palette. */
+.table-preview { color: @carelo_text; background: @carelo_pane; }
+.table-preview-toolbar { padding: 6px 8px; border-bottom: 1px solid @carelo_separator; }
+.table-preview-toolbar dropdown { min-width: 0; }
+.table-preview columnview { color: @carelo_text; background: @carelo_pane; font-size: 12px; }
+.table-preview columnview header { background: @carelo_control; }
+.table-preview columnview header button { padding: 5px 8px; font-weight: 600; }
+.table-preview columnview header label { color: @carelo_text; font-size: 12px; font-weight: 600; }
+.table-preview-cell, .table-preview-row-number { padding: 5px 8px; font-variant-numeric: tabular-nums; }
+.table-preview-row-number { color: @carelo_muted; }
+.table-preview-status { padding: 6px 8px; font-size: 11px; color: @carelo_muted; border-top: 1px solid @carelo_separator; }
+.table-preview-empty { padding: 12px; color: @carelo_muted; }
+
 .quick-look-root {
   color: var(--dialog-fg-color);
   background: var(--dialog-bg-color);
@@ -2559,25 +2661,6 @@ dialog .dialog-hint {
   letter-spacing: -0.01em;
 }
 
-.utility-dialog headerbar button {
-  min-width: 28px;
-  min-height: 28px;
-  border-radius: 6px;
-  color: color-mix(in srgb, currentColor 65%, transparent);
-  background: transparent;
-  box-shadow: none;
-}
-
-.utility-dialog headerbar button:hover {
-  color: currentColor;
-  background: color-mix(in srgb, currentColor 9%, transparent);
-}
-
-.utility-dialog headerbar windowcontrols > button > image {
-  background: transparent;
-  box-shadow: none;
-}
-
 .dialog-body {
   padding: 4px 22px 20px;
 }
@@ -2609,6 +2692,7 @@ dialog .dialog-hint {
 }
 
 .dialog-actions button,
+.utility-dialog .dialog-button,
 .tools-dialog .tool-button {
   min-height: 34px;
   padding: 0 16px;
@@ -2623,17 +2707,20 @@ dialog .dialog-hint {
 }
 
 .dialog-actions button:hover,
+.utility-dialog .dialog-button:hover,
 .tools-dialog .tool-button:hover {
   background: color-mix(in srgb, currentColor 13%, transparent);
 }
 
 .dialog-actions button.suggested-action,
+.utility-dialog .dialog-button.suggested-action,
 .tools-dialog .tool-button.suggested-action {
   color: var(--accent-fg-color);
   background: var(--accent-bg-color);
 }
 
 .dialog-actions button.suggested-action:hover,
+.utility-dialog .dialog-button.suggested-action:hover,
 .tools-dialog .tool-button.suggested-action:hover {
   background: color-mix(in srgb, var(--accent-bg-color) 88%, white);
 }
@@ -2645,6 +2732,14 @@ dialog .dialog-hint {
 
 .dialog-actions button.destructive-action:hover {
   background: #ec5f63;
+}
+
+.secure-delete-dialog .dialog-actions button.destructive-action {
+  background: #bc3543;
+}
+
+.secure-delete-dialog .dialog-actions button.destructive-action:hover {
+  background: #a72d3a;
 }
 
 .settings-link {
@@ -2815,3 +2910,67 @@ image.commander-file-icon.icon-document { color: @carelo_icon; }
 image.commander-file-icon.icon-pdf { color: mix(@carelo_text, #cd746b, 0.70); }
 image.commander-file-icon.icon-sheet { color: mix(@carelo_text, #559b78, 0.70); }
 image.commander-file-icon.icon-muted { color: @carelo_icon; }
+
+/* Settings retain the utility dialogs' flat native controls and quiet dividers. */
+.settings-navigation { border-right: 1px solid @carelo_separator; background: transparent; }
+.settings-navigation list { background: transparent; padding: 10px 8px; }
+.settings-navigation row { min-height: 36px; padding: 0 10px; border-radius: 5px; }
+.settings-page { padding: 18px 24px 24px; }
+.settings-page > .title-2 { margin-bottom: 8px; }
+.settings-updates { padding: 12px 0 18px; border-bottom: 1px solid @carelo_separator; }
+.settings-description { color: @carelo_muted; font-size: 12px; line-height: 1.4; }
+.settings-section { font-size: 13px; font-weight: 600; margin-top: 22px; margin-bottom: 4px; }
+.settings-row { padding: 13px 0; border-bottom: 1px solid @carelo_separator; }
+.settings-row-title { font-size: 13px; font-weight: 500; }
+.settings-row button { min-height: 30px; }
+.settings-search { margin-top: 14px; margin-bottom: 8px; }
+.settings-shortcuts, .settings-shortcuts > row { background: transparent; padding: 0; }
+.settings-shortcuts .settings-row { padding: 9px 0; }
+.settings-binding { font-size: 12px; min-width: 92px; }
+.shortcut-recorder { min-height: 58px; margin: 10px 0; font-size: 20px; }
+
+/* Keep accent text legible in both appearances and across custom palettes. */
+.settings-dialog button.link,
+.settings-dialog button.link:visited,
+.settings-dialog button.link:hover,
+.settings-dialog label link,
+.settings-dialog label link:visited,
+.settings-dialog label link:hover {
+  color: mix(@carelo_accent, @carelo_text, 0.45);
+}
+
+/* Even a white custom accent stays below #737373 under white action text. */
+.settings-dialog .dialog-actions button.suggested-action,
+.shortcut-capture-dialog .dialog-actions button.suggested-action,
+.utility-dialog .file-tools button.suggested-action {
+  color: #ffffff;
+  background: mix(@carelo_accent, #000000, 0.60);
+}
+
+.settings-dialog .dialog-actions button.suggested-action:hover,
+.shortcut-capture-dialog .dialog-actions button.suggested-action:hover,
+.utility-dialog .file-tools button.suggested-action:hover {
+  background: mix(@carelo_accent, #000000, 0.55);
+}
+
+/* File tools extend the shared utility controls and native panel rows. */
+.file-tools { font-size: 13px; }
+.file-tool-field > label { font-size: 12.5px; }
+.file-tool-summary, .power-tools-note {
+  color: @carelo_muted;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.power-tools-table { color: @carelo_text; background: transparent; }
+.power-tools-table header { background: @carelo_control; }
+.power-tools-table header button { padding: 5px 8px; min-height: 24px; border-radius: 0; }
+.power-tools-table header label { color: @carelo_muted; font-size: 12px; font-weight: 500; }
+.power-tools-table row { padding: 0; min-height: 32px; }
+.power-tools-table row:nth-child(even) { background: @carelo_zebra; }
+.power-tools-table row:hover { background: @carelo_hover; }
+.power-tools-table row:selected { color: @carelo_selected_text; background: @carelo_selected; }
+.power-tools-table row:focus-visible { outline: 1px solid @carelo_accent; outline-offset: -1px; }
+.power-tools-cell { padding: 6px 10px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.file-compare-table .power-tools-cell { font-family: monospace; font-size: 12px; }
+.power-tools-changed { background: alpha(@carelo_accent, 0.10); }
+.power-tools-table row:selected .power-tools-changed { background: transparent; }

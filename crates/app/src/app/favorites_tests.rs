@@ -163,9 +163,22 @@ fn open_rename(app: &relm4::Controller<AppModel>, index: usize) -> (adw::Dialog,
     }
     let menu = find::<gtk::Popover>(button.upcast_ref()).unwrap();
     assert!(menu.is_visible());
-    find::<gtk::Button>(&menu.child().unwrap())
-        .unwrap()
-        .emit_clicked();
+    fn rename_button(widget: &gtk::Widget) -> Option<gtk::Button> {
+        if let Some(button) = widget.downcast_ref::<gtk::Button>()
+            && button.tooltip_text().as_deref() == Some("Rename…")
+        {
+            return Some(button.clone());
+        }
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            if let Some(button) = rename_button(&widget) {
+                return Some(button);
+            }
+            child = widget.next_sibling();
+        }
+        None
+    }
+    rename_button(menu.upcast_ref()).unwrap().emit_clicked();
     wait_until(|| app.widget().visible_dialog().is_some());
     let dialog = app.widget().visible_dialog().unwrap();
     let entry = find::<gtk::Entry>(dialog.upcast_ref()).unwrap();

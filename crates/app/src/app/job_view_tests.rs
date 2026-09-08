@@ -101,6 +101,25 @@ fn trash_delete_and_empty_files_use_item_progress() {
 }
 
 #[test]
+fn secure_delete_has_progress_and_controls_but_never_a_blind_retry() {
+    let mut job = operation(JobState::Running);
+    job.kind = OperationKind::SecureDelete;
+    job.retry = OperationRetry::SecureDelete {
+        sources: vec![VPath::from("/source/report.pdf")],
+    };
+    let view = JobPresentation::new(&job);
+    assert_eq!(view.title, "Overwriting files");
+    assert_eq!(view.fraction, Some(0.25));
+    assert!(view.can_cancel && view.can_pause);
+    job.phase = JobPhase::Verifying;
+    assert_eq!(JobPresentation::new(&job).status, "Verifying…");
+    for state in [JobState::Cancelled, JobState::Failed] {
+        job.state = state;
+        assert!(!JobPresentation::new(&job).can_retry);
+    }
+}
+
+#[test]
 fn pause_cancel_and_conflicts_do_not_show_stale_speed_or_eta() {
     let mut operation = operation(JobState::Scanning);
     operation.control.pause();

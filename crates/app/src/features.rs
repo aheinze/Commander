@@ -5,6 +5,9 @@ use dualpane_vfs::Vfs;
 use sha2::{Digest, Sha256};
 
 mod compare;
+pub mod duplicates;
+pub mod file_compare;
+pub mod rename_preview;
 pub use compare::{
     CompareEntry, SyncAction, SyncActionKind, SyncDirection, SyncPlan, compare_directories,
     compare_with_contents, execute_sync_plan, plan_sync,

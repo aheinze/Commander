@@ -293,6 +293,7 @@ def create_release(args):
         # JSON is valid YAML, and safely represents names and paths containing quotes/spaces.
         config_path.write_text(json.dumps(config, indent=2) + "\n")
         appimage_glibc = None
+        packaged_assets = []
         for kind in args.formats:
             if kind == "appimage":
                 appimage_glibc = build_appimage(stage, work, artifacts / f"{name}.AppImage", arch,
@@ -305,12 +306,18 @@ def create_release(args):
                 suffix = ".pkg.tar.zst" if kind == "arch" else f".{kind}"
                 if len(created) != 1 or not all(path.name.endswith(suffix) and path.stat().st_size for path in created):
                     raise ValueError(f"nfpm did not produce exactly one nonempty {suffix} package")
+            asset = artifacts / f"{name}.AppImage" if kind == "appimage" else next(iter(created))
+            with asset.open("rb") as source:
+                asset_digest = hashlib.file_digest(source, "sha256").hexdigest()
+            packaged_assets.append({"name": asset.name, "architecture": arch, "format": kind,
+                                    "size": asset.stat().st_size, "sha256": asset_digest,
+                                    "glibc_minimum": appimage_glibc if kind == "appimage" else glibc})
         with (stage / "usr/bin/commander").open("rb") as source:
             binary_digest = hashlib.file_digest(source, "sha256").hexdigest()
         manifest = {"name": "commander", "version": version, "revision": args.revision,
                     "architecture": arch, "formats": args.formats, "glibc_minimum": glibc,
                     "appimage_glibc_minimum": appimage_glibc,
-                    "binary_sha256": binary_digest}
+                    "binary_sha256": binary_digest, "assets": packaged_assets}
         (artifacts / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
         checksums = []
         for artifact in sorted(artifacts.iterdir()):

@@ -12,8 +12,6 @@ pub(super) struct SearchWidgets {
     pub(super) query: gtk::SearchEntry,
     pub(super) content: gtk::ToggleButton,
     pub(super) status: gtk::Label,
-    details: gtk::MenuButton,
-    error_detail: gtk::Label,
     pub(super) results: gtk::ListView,
     pub(super) result_store: gio::ListStore,
     pub(super) stop: gtk::Button,
@@ -150,37 +148,10 @@ impl SearchWidgets {
             filters.connect_toggled(move |chip| advanced.set_visible(chip.is_active()));
         }
 
-        let status = gtk::Label::new(Some("Press Enter to search the active folder"));
+        let status = gtk::Label::new(Some("0 results"));
         status.add_css_class("search-status");
         status.set_xalign(0.0);
-        status.set_wrap(true);
-        status.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-        status.set_max_width_chars(70);
-        status.set_hexpand(true);
-        let status_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let error_detail = gtk::Label::new(None);
-        error_detail.set_wrap(true);
-        error_detail.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-        error_detail.set_max_width_chars(50);
-        error_detail.set_selectable(true);
-        error_detail.set_margin_top(12);
-        error_detail.set_margin_bottom(12);
-        error_detail.set_margin_start(12);
-        error_detail.set_margin_end(12);
-        let detail_popover = gtk::Popover::new();
-        detail_popover.set_child(Some(&error_detail));
-        let details = gtk::MenuButton::builder()
-            .label("Details")
-            .popover(&detail_popover)
-            .valign(gtk::Align::Center)
-            .build();
-        details.add_css_class("flat");
-        details.set_margin_end(16);
-        details.set_tooltip_text(Some("Why some items could not be searched"));
-        details.set_visible(false);
-        status_row.append(&status);
-        status_row.append(&details);
-        root.append(&status_row);
+        root.append(&status);
         let result_store = gio::ListStore::new::<glib::BoxedAnyObject>();
         let results = gtk::ListView::new(
             Some(gtk::NoSelection::new(Some(result_store.clone()))),
@@ -212,7 +183,7 @@ impl SearchWidgets {
             .build();
         root.append(&scrolled);
         let view = adw::ToolbarView::new();
-        view.add_top_bar(&adw::HeaderBar::new());
+        view.add_top_bar(&chrome::dialog_header(&dialog));
         view.set_content(Some(&root));
         dialog.set_child(Some(&view));
 
@@ -320,8 +291,6 @@ impl SearchWidgets {
             query,
             content,
             status,
-            details,
-            error_detail,
             results,
             result_store,
             stop,
@@ -355,25 +324,36 @@ impl SearchWidgets {
         }
         self.stop.set_visible(model.search_loading);
         let report = &model.search_results;
-        let summary = if model.search_loading {
-            "Searching…".to_owned()
-        } else if let Some(error) = &model.search_error {
-            error.clone()
-        } else if model.search_generation == 0 && report.hits.is_empty() {
-            "Press Enter to search the active folder".to_owned()
+        self.status.set_label(&if model.search_loading {
+            format!("Searching… {} results", report.hits.len())
         } else {
-            report.summary()
+            format!("{} results", report.hits.len())
+        });
+        let feedback = if model.search_loading
+            || (model.search_generation == 0
+                && report.hits.is_empty()
+                && model.search_error.is_none()
+                && report.first_error.is_none())
+        {
+            None
+        } else {
+            Some(model.search_error.clone().unwrap_or_else(|| {
+                let summary = report.summary();
+                report
+                    .first_error
+                    .as_ref()
+                    .map_or(summary.clone(), |error| format!("{summary}\n{error}"))
+            }))
         };
-        self.status.set_label(&summary);
-        self.status.set_tooltip_text(report.first_error.as_deref());
-        self.details.set_visible(report.first_error.is_some());
-        self.error_detail
-            .set_label(report.first_error.as_deref().unwrap_or_default());
-        if model.search_error.is_some() || report.skipped_entries > 0 || report.limit_reached {
-            self.status.add_css_class("warning");
-        } else {
-            self.status.remove_css_class("warning");
-        }
+        notifications::observe(
+            "search",
+            feedback.as_deref(),
+            if model.search_error.is_some() || report.first_error.is_some() {
+                notifications::Kind::Error
+            } else {
+                notifications::Kind::Info
+            },
+        );
         if *self.rendered_results.borrow() != report.hits {
             let items: Vec<_> = report
                 .hits

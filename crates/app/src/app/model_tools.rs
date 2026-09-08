@@ -314,6 +314,10 @@ impl AppModel {
 
     pub(super) fn start_terminal(&mut self, sender: &ComponentSender<Self>) {
         let cwd = self.pane(self.active_pane).current_directory().clone();
+        self.start_terminal_at(cwd, sender);
+    }
+
+    pub(super) fn start_terminal_at(&mut self, cwd: VPath, sender: &ComponentSender<Self>) {
         let id = self.next_terminal_id;
         self.next_terminal_id = self.next_terminal_id.wrapping_add(1).max(1);
         self.terminal_tabs.push(TerminalTabState {
@@ -563,24 +567,6 @@ impl AppModel {
                 self.start_listing(PaneId::Right, sender);
             }
             Err(error) => self.pane_mut(self.active_pane).error = Some(error),
-        }
-    }
-
-    pub(super) fn on_archive_browse_ready(
-        &mut self,
-        pane: PaneId,
-        source: VPath,
-        result: Result<tempfile::TempDir, String>,
-        sender: &ComponentSender<Self>,
-    ) {
-        self.tool_cancel = None;
-        match result {
-            Ok(directory) => {
-                let root = VPath::from(directory.path());
-                self.archive_mounts.push((source, directory));
-                self.navigate(pane, root, sender);
-            }
-            Err(error) => self.pane_mut(pane).error = Some(error),
         }
     }
 

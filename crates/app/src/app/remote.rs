@@ -4,6 +4,8 @@
 
 mod connection;
 mod connection_form;
+mod saved;
+pub(super) use saved::{relative_mount_path, save_location};
 
 pub(crate) use connection::RemoteConnection;
 use connection_form::ConnectionForm;
@@ -177,20 +179,38 @@ enum RowKind {
 /// replaces that location when submitted.
 pub(super) fn show_remote_dialog(
     recent: Vec<String>,
+    names: BTreeMap<String, String>,
     editing: Option<String>,
     sender: &ComponentSender<AppModel>,
 ) {
     let Some(window) = relm4::main_application().active_window() else {
         return;
     };
-    let (dialog, view) = utility_dialog("Connect to Server", 560, 660, "remote-dialog");
+    let is_editing = editing.is_some();
+    let (dialog, view) = utility_dialog(
+        if is_editing {
+            "Edit Remote Storage"
+        } else {
+            "Connect to Server"
+        },
+        560,
+        if is_editing { 540 } else { 660 },
+        "remote-dialog",
+    );
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
 
-    let connect = gtk::Button::with_label("Connect");
-    connect.add_css_class("suggested-action");
+    let connect = gtk::Button::with_label(if is_editing {
+        "Save and connect"
+    } else {
+        "Connect"
+    });
+    if !is_editing {
+        connect.add_css_class("suggested-action");
+    }
     let form = ConnectionForm::new(&connect);
     if let Some(uri) = &editing {
         form.load_uri(uri);
+        form.set_name(names.get(uri).map_or("", String::as_str));
     }
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(form.widget());
@@ -215,16 +235,31 @@ pub(super) fn show_remote_dialog(
                 .split_once("://")
                 .map_or(uri.as_str(), |(_, rest)| rest)
                 .trim_end_matches('/');
-            list.append(&server_row(
+            let row = server_row(
                 RowKind::Recent,
-                title,
+                names.get(uri).map_or(title, String::as_str),
                 Some(scheme_label(uri)),
                 uri,
                 &form,
-            ));
+            );
+            let form = form.clone();
+            let name = names.get(uri).cloned().unwrap_or_default();
+            row.connect_clicked(move |_| form.set_name(&name));
+            list.append(&row);
         }
     }
-    content.append(&list);
+    if !is_editing {
+        content.append(&list);
+    } else {
+        let hint = gtk::Label::new(Some(
+            "Save updates this location without connecting. Existing keyring passwords are kept. To use a new password, choose Save and connect.",
+        ));
+        hint.set_xalign(0.0);
+        hint.set_wrap(true);
+        hint.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        hint.add_css_class("dialog-body");
+        content.append(&hint);
+    }
     let scrolled = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
         .vscrollbar_policy(gtk::PolicyType::Automatic)
@@ -237,9 +272,36 @@ pub(super) fn show_remote_dialog(
     let cancel = gtk::Button::with_label("Cancel");
     actions.append(&cancel);
     actions.append(&connect);
+    if let Some(replacing) = editing.clone() {
+        let save = gtk::Button::with_label("Save");
+        save.add_css_class("suggested-action");
+        form.set_save_button(&save);
+        actions.append(&save);
+        let input = sender.input_sender().clone();
+        let form = form.clone();
+        let weak = dialog.downgrade();
+        save.connect_clicked(move |button| {
+            if !button.is_sensitive() {
+                return;
+            }
+            if let Ok(connection) = form.connection() {
+                let _ = input.send(AppMsg::SaveRemote {
+                    uri: connection.uri,
+                    replacing: replacing.clone(),
+                    name: form.name(),
+                });
+                form.clear_password();
+                if let Some(dialog) = weak.upgrade() {
+                    dialog.close();
+                }
+            }
+        });
+        dialog.set_default_widget(Some(&save));
+    } else {
+        dialog.set_default_widget(Some(&connect));
+    }
     root.append(&actions);
     view.set_content(Some(&root));
-    dialog.set_default_widget(Some(&connect));
     {
         let dialog = dialog.downgrade();
         cancel.connect_clicked(move |_| {
@@ -260,6 +322,7 @@ pub(super) fn show_remote_dialog(
             let _ = input.send(AppMsg::ConnectRemoteWithOptions {
                 connection,
                 replacing: editing.clone(),
+                name: (is_editing || !form.name().is_empty()).then(|| form.name()),
             });
             form.clear_password();
             if let Some(dialog) = dialog.upgrade() {
@@ -279,6 +342,11 @@ pub(super) fn show_remote_dialog(
             form.clear_password();
         });
     }
+    if is_editing {
+        dialog.present(Some(&window));
+        form.focus();
+        return;
+    }
     {
         let form = form.clone();
         let cancellable = cancellable.clone();
@@ -292,14 +360,10 @@ pub(super) fn show_remote_dialog(
                 return;
             }
             if servers.is_empty() {
-                network_status.set_label("Nothing found");
-                let empty = gtk::Label::new(Some(
-                    "No shared folders are advertised on this network. Servers announcing SMB, SFTP, FTP, WebDAV, AFP, or NFS over Bonjour/Avahi appear here.",
-                ));
-                empty.set_wrap(true);
-                empty.set_xalign(0.0);
-                empty.add_css_class("remote-empty");
-                network_rows.append(&empty);
+                network_status.set_label("0 servers");
+                notifications::info(
+                    "No shared folders were discovered on this network. Enter a server address to connect directly.",
+                );
                 return;
             }
             network_status.set_label(&format!(
@@ -339,7 +403,7 @@ pub(super) fn show_remote_error(uri: String, error: String, sender: &ComponentSe
         return;
     };
     let auth_related = looks_like_auth_failure(&error);
-    let dialog = AlertSheet::new(Some("Could not connect"), None);
+    let dialog = AlertSheet::new(Some("Connection options"), None);
     let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
     content.add_css_class("remote-error");
     let address = gtk::Label::new(Some(&uri));
@@ -350,24 +414,6 @@ pub(super) fn show_remote_error(uri: String, error: String, sender: &ComponentSe
     address.set_can_focus(false);
     address.add_css_class("remote-error-address");
     content.append(&address);
-    let callout = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    callout.add_css_class("remote-error-callout");
-    let icon = gtk::Image::from_icon_name(if auth_related {
-        "commander-key-round-symbolic"
-    } else {
-        "commander-unplug-symbolic"
-    });
-    icon.set_pixel_size(16);
-    icon.set_valign(gtk::Align::Start);
-    icon.add_css_class("remote-error-icon");
-    callout.append(&icon);
-    let message = gtk::Label::new(Some(error.trim_end_matches('.')));
-    message.set_xalign(0.0);
-    message.set_wrap(true);
-    message.set_hexpand(true);
-    message.add_css_class("remote-error-message");
-    callout.append(&message);
-    content.append(&callout);
     let hint = gtk::Label::new(Some(if auth_related {
         "Forgetting the saved password asks for a new one on the next attempt. To change the username or password, edit the connection."
     } else {
@@ -399,7 +445,17 @@ pub(super) fn show_remote_error(uri: String, error: String, sender: &ComponentSe
             _ => Ok(()),
         };
     });
-    dialog.present(Some(&window));
+    let window = window.downgrade();
+    notifications::action(
+        notifications::Kind::Error,
+        &format!("Could not connect: {error}"),
+        "Options",
+        move || {
+            if let Some(window) = window.upgrade() {
+                dialog.present(Some(&window));
+            }
+        },
+    );
 }
 
 pub(super) fn looks_like_auth_failure(error: &str) -> bool {

@@ -7,14 +7,21 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+calamine.workspace = true
+cfb.workspace = true
+csv.workspace = true
 crossbeam-channel.workspace = true
 dualpane-core.workspace = true
 dualpane-vfs.workspace = true
 image.workspace = true
 karet-pdf.workspace = true
+pulldown-cmark.workspace = true
+percent-encoding.workspace = true
+resvg.workspace = true
 syntect.workspace = true
 two-face.workspace = true
 thiserror.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -10,8 +10,12 @@
 //! `pub(super)`.
 
 mod alert;
+mod archive_browser;
+mod archive_editor;
+mod batch_rename_view;
 #[cfg(test)]
 mod breadcrumb_tests;
+mod chrome;
 mod clipboard;
 mod compare_view;
 mod component;
@@ -38,12 +42,17 @@ mod model_tools;
 mod model_view;
 mod model_watch;
 mod navigation_state;
+mod notifications;
 mod palette;
+mod pane_git;
 mod pane_view;
+mod power_tools;
 mod preview;
 mod recovery;
 mod remote;
 mod search_view;
+mod secure_delete;
+mod settings;
 mod shortcuts;
 mod sidebar;
 mod terminal_view;
@@ -106,7 +115,7 @@ use crate::pdf::{PdfTool, PdfToolOptions, run_pdf_tool};
 use crate::session::{
     AppearanceMode, ColorTheme, CustomToolSession, FavoriteGroupSession, FolderViewSession,
     NavigationSession, PaneSession, PaneSortKey, PaneViewMode, SessionState, SessionWorker,
-    WorkspaceSession,
+    WorkflowPreferences, WorkspaceSession,
 };
 use crate::terminal::{TerminalEvent, TerminalSession};
 
@@ -122,8 +131,7 @@ use self::dialogs::{
     show_new_directory_dialog, show_new_favorite_group_dialog, show_new_file_dialog,
     show_open_with_dialog, show_pdf_tools_dialog, show_permanent_delete_dialog,
     show_permissions_dialog, show_rename_dialog, show_rename_workspace_dialog,
-    show_save_workspace_dialog, show_settings_dialog, show_shortcut_reference,
-    show_update_workspace_dialog,
+    show_save_workspace_dialog, show_shortcut_reference, show_update_workspace_dialog,
 };
 use self::fileops::{apply_history, batch_rename, common_parent, set_mode_tree};
 use self::palette::{matching_commands, palette_query_matches};
@@ -283,6 +291,7 @@ struct OperationStatus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OperationKind {
     Files(JobKind),
+    SecureDelete,
     CreateArchive,
     ExtractArchive,
 }
@@ -291,6 +300,7 @@ impl OperationKind {
     fn label(self) -> &'static str {
         match self {
             Self::Files(kind) => job_kind_label(kind),
+            Self::SecureDelete => "Secure delete",
             Self::CreateArchive => "Create archive",
             Self::ExtractArchive => "Extract archive",
         }
@@ -303,6 +313,9 @@ impl OperationKind {
 
 #[derive(Clone)]
 enum OperationRetry {
+    SecureDelete {
+        sources: Vec<VPath>,
+    },
     Copy {
         pane: PaneId,
         sources: Vec<VPath>,
@@ -873,6 +886,8 @@ struct MillerColumnState {
 }
 
 struct PaneState {
+    archive_browse: archive_browser::ArchiveBrowseState,
+    git: pane_git::PaneGitState,
     folder_views: BTreeMap<String, FolderViewSession>,
     locations: BTreeMap<String, NavigationSession>,
     restore_names: Vec<String>,
@@ -945,6 +960,8 @@ impl PaneState {
         };
         let active_tab = session.active_tab.min(tabs.len() - 1);
         let mut state = Self {
+            archive_browse: archive_browser::ArchiveBrowseState::default(),
+            git: pane_git::PaneGitState::default(),
             folder_views: session.folders.clone(),
             locations: session.locations.clone(),
             restore_names: Vec::new(),
@@ -1038,6 +1055,7 @@ impl PaneState {
     }
 
     fn cancel_work(&mut self) {
+        self.archive_browse.cancel();
         self.selection_size.reset();
         self.selection_size_stamp = None;
         if let Some(cancel) = self.listing_cancel.take() {
@@ -1144,7 +1162,7 @@ impl PaneState {
             } else {
                 SortDirection::Ascending
             },
-            directories_first: true,
+            directories_first: self.sort.directories_first,
         };
         self.show_hidden = session.show_hidden;
         self.error = None;
@@ -1189,11 +1207,13 @@ pub struct AppModel {
     devices: devices::DeviceState,
     panes: [PaneState; 2],
     active_pane: PaneId,
+    folder_action_target: Option<context_menu::TabFolderTarget>,
     vertical_split: bool,
     dual_pane: bool,
     split_position: i32,
     keymap: Keymap,
     sidebar_visible: bool,
+    collapsed_sidebar_groups: BTreeSet<String>,
     preview_visible: bool,
     preview_width: i32,
     quick_look_open: bool,
@@ -1210,9 +1230,11 @@ pub struct AppModel {
     window_height: i32,
     workspaces: Vec<WorkspaceSession>,
     remote_uris: Vec<String>,
+    remote_names: BTreeMap<String, String>,
     appearance: AppearanceMode,
     color_theme: ColorTheme,
     parallel_transfers: bool,
+    workflow: WorkflowPreferences,
     custom_tools: Vec<CustomToolSession>,
     custom_tools_revision: u64,
     tags: BTreeMap<String, String>,
@@ -1247,7 +1269,7 @@ pub struct AppModel {
     search_results: SearchResults,
     search_error: Option<String>,
     tool_cancel: Option<CancelToken>,
-    archive_mounts: Vec<(VPath, tempfile::TempDir)>,
+    archive_mounts: archive_browser::ArchiveLocations,
     terminal_visible: bool,
     terminal_tabs: Vec<TerminalTabState>,
     active_terminal: Option<u64>,
@@ -1336,6 +1358,12 @@ pub enum AppMsg {
     ReviewRecovery(std::path::PathBuf),
     ExecuteCommand(CommandId),
     NavigateActive(VPath),
+    SidebarLocation {
+        path: VPath,
+        action: sidebar::menus::LocationAction,
+    },
+    RemoveRecent(VPath),
+    ClearRecent,
     SetPaletteQuery(String),
     ClosePalette,
     OmarchyThemeChanged,
@@ -1387,6 +1415,11 @@ pub enum AppMsg {
         mode: u32,
         recursive: bool,
     },
+    PermissionsInspected {
+        pane: PaneId,
+        path: VPath,
+        result: Result<u32, String>,
+    },
     PermissionsReady {
         path: VPath,
         mode: u32,
@@ -1414,8 +1447,8 @@ pub enum AppMsg {
     },
     ArchiveBrowseReady {
         pane: PaneId,
-        source: VPath,
-        result: Result<tempfile::TempDir, String>,
+        id: JobId,
+        result: Result<archive_browser::OpenedArchive, String>,
     },
     ConvertImage(ImageOutputFormat),
     ImageConverted(Result<VPath, String>),
@@ -1461,9 +1494,23 @@ pub enum AppMsg {
         destination: VPath,
         result: Result<(), String>,
     },
+    ArchiveEdited(VPath),
     BatchRename(Vec<(VPath, String)>),
     BatchRenameFinished(Result<Vec<(VPath, VPath)>, String>),
     DeletePermanentConfirmed,
+    SecureDeleteConfirmed {
+        pane: PaneId,
+        plan: dualpane_platform::secure_delete::SecureDeletePlan,
+    },
+    SecureDeleteProgress {
+        id: JobId,
+        progress: dualpane_platform::secure_delete::SecureDeleteProgress,
+    },
+    SecureDeleteReady {
+        id: JobId,
+        pane: PaneId,
+        result: Result<usize, String>,
+    },
     OpenFailed(PaneId, String),
     PreviewReady {
         generation: u64,
@@ -1496,6 +1543,12 @@ pub enum AppMsg {
         generation: u64,
         info: Option<GitInfo>,
     },
+    RefreshPaneGit,
+    PaneGitReady {
+        pane: PaneId,
+        path: VPath,
+        info: Option<pane_git::GitStatus>,
+    },
     RequestThumbnail {
         pane: PaneId,
         generation: u64,
@@ -1506,6 +1559,10 @@ pub enum AppMsg {
     ClearLayered,
     SelectionChanged(PaneId, Selection, Option<u32>),
     ContextTarget(PaneId, Option<(VPath, EntryKind)>),
+    TabFolderAction {
+        target: context_menu::TabFolderTarget,
+        action: Box<AppMsg>,
+    },
     PasteInto(PaneId, VPath),
     MoveCursor(i32, bool),
     MoveCursorVertical(i32, bool),
@@ -1579,6 +1636,10 @@ pub enum AppMsg {
         path: VPath,
         name: String,
     },
+    SetSidebarGroupExpanded {
+        key: String,
+        expanded: bool,
+    },
     CreateFavoriteGroup(String),
     RemoveFavoriteGroup(usize),
     AddCurrentToFavoriteGroup(usize),
@@ -1587,7 +1648,12 @@ pub enum AppMsg {
         item: usize,
     },
     ConnectRemote(String),
-    RemoveRemote(usize),
+    RemoveRemote(String),
+    SaveRemote {
+        uri: String,
+        replacing: String,
+        name: String,
+    },
     /// Reopens the Connect sheet with this address ready to edit; connecting
     /// replaces the old entry.
     EditRemote(String),
@@ -1597,6 +1663,7 @@ pub enum AppMsg {
     ConnectRemoteWithOptions {
         connection: remote::RemoteConnection,
         replacing: Option<String>,
+        name: Option<String>,
     },
     RemotePasswordForgotten {
         uri: String,
@@ -1606,11 +1673,8 @@ pub enum AppMsg {
         uri: String,
         result: Result<VPath, String>,
     },
-    SetSettings {
-        appearance: AppearanceMode,
-        color_theme: ColorTheme,
-        parallel_transfers: bool,
-    },
+    SetSettings(Box<settings::SettingsDraft>),
+    SettingsSaveFailed(String),
     ManageCustomTools,
     SetCustomTools(Vec<CustomToolSession>),
     RunCustomTool(usize),
@@ -1702,6 +1766,8 @@ pub struct AppWidgets {
     workspace_paned: gtk::Paned,
     sidebar_revealer: gtk::Revealer,
     sidebar_focus_target: gtk::Button,
+    sidebar_groups: Vec<sidebar::CollapsibleGroup>,
+    sidebar_favorite_groups: Vec<sidebar::CollapsibleGroup>,
     sidebar_bookmarks: gtk::Box,
     sidebar_recent: gtk::Box,
     sidebar_workspaces: gtk::Box,
@@ -1710,6 +1776,7 @@ pub struct AppWidgets {
     sidebar_places: Vec<(VPath, gtk::Button)>,
     sidebar_bookmark_rows: Vec<(VPath, gtk::Button)>,
     sidebar_recent_rows: Vec<(VPath, gtk::Button)>,
+    sidebar_remote_rows: Vec<(VPath, gtk::Button)>,
     rendered_active_location: Option<VPath>,
     rendered_sidebar_visible: bool,
     rendered_focus_sidebar_epoch: u64,
@@ -1720,6 +1787,8 @@ pub struct AppWidgets {
     rendered_recent: Vec<String>,
     rendered_workspaces: Vec<String>,
     rendered_remotes: Vec<String>,
+    rendered_remote_names: BTreeMap<String, String>,
+    rendered_remote_devices: Option<u64>,
     palette_dialog: adw::Dialog,
     palette_parent: adw::ApplicationWindow,
     palette_entry: gtk::SearchEntry,
@@ -1777,10 +1846,22 @@ impl AppModel {
     fn workspace_snapshot(&self, name: &str) -> WorkspaceSession {
         WorkspaceSession {
             name: name.to_owned(),
-            left: self.pane(PaneId::Left).active().path.to_string(),
-            right: self.pane(PaneId::Right).active().path.to_string(),
-            left_pane: Some(self.pane(PaneId::Left).to_session()),
-            right_pane: Some(self.pane(PaneId::Right).to_session()),
+            left: self
+                .archive_mounts
+                .display(&self.pane(PaneId::Left).active().path)
+                .to_string(),
+            right: self
+                .archive_mounts
+                .display(&self.pane(PaneId::Right).active().path)
+                .to_string(),
+            left_pane: Some(
+                self.archive_mounts
+                    .session(self.pane(PaneId::Left).to_session()),
+            ),
+            right_pane: Some(
+                self.archive_mounts
+                    .session(self.pane(PaneId::Right).to_session()),
+            ),
             active_pane: Some(self.active_pane.index() as u8),
             dual_pane: Some(self.dual_pane),
             vertical_split: Some(self.vertical_split),
@@ -1865,11 +1946,14 @@ impl AppModel {
                 }),
         );
         items.extend(self.remote_uris.iter().filter_map(|uri| {
-            let label = format!("Connect remote · {uri}");
-            palette_query_matches(query, &[&label, "server remote connect"]).then(|| PaletteItem {
-                action: PaletteAction::Remote(uri.clone()),
-                label,
-                binding: String::new(),
+            let name = self.remote_names.get(uri).unwrap_or(uri);
+            let label = format!("Connect remote · {name}");
+            palette_query_matches(query, &[&label, uri, "server remote connect"]).then(|| {
+                PaletteItem {
+                    action: PaletteAction::Remote(uri.clone()),
+                    label,
+                    binding: String::new(),
+                }
             })
         }));
         items.extend(
@@ -1948,7 +2032,11 @@ impl Drop for AppModel {
             cancel.cancel();
         }
         self.terminal_tabs.clear();
+        for pane in &mut self.panes {
+            pane.archive_browse.cancel();
+        }
         for pane in &self.panes {
+            pane.git.cancel();
             pane.thumbnail_cancel.cancel();
         }
         self.thumbnail_scheduler.take();

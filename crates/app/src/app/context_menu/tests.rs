@@ -204,6 +204,296 @@ fn gtk_context_menu_search_keyboard_selection_and_paste_destination() {
     app.widget().close();
 }
 
+#[test]
+#[ignore = "requires an isolated GTK session; run in the native suite"]
+fn gtk_tab_folder_menu_targets_inactive_tabs_and_preserves_selection() {
+    assert_eq!(std::env::var("COMMANDER_ISOLATED_TEST").as_deref(), Ok("1"));
+    adw::init().unwrap();
+    relm4::main_adw_application()
+        .register(gio::Cancellable::NONE)
+        .unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let folder = fixture.path().join("Inactive tab folder");
+    let other = fixture.path().join("Other pane");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let document = fixture.path().join("keep.txt");
+    std::fs::write(&document, "keep this file").unwrap();
+    std::fs::write(other.join("also-keep.txt"), "keep other pane").unwrap();
+    let (session_worker, startup) = SessionWorker::start().unwrap();
+    let app = AppModel::builder()
+        .launch(AppInit {
+            options: AppOptions::default(),
+            session_worker,
+            session: Some(SessionState {
+                left: PaneSession {
+                    tabs: vec![
+                        fixture.path().display().to_string(),
+                        folder.display().to_string(),
+                    ],
+                    ..PaneSession::default()
+                },
+                right: PaneSession {
+                    tabs: vec![other.display().to_string()],
+                    ..PaneSession::default()
+                },
+                sidebar_visible: false,
+                preview_visible: false,
+                window_width: 1100,
+                window_height: 800,
+                ..SessionState::default()
+            }),
+            keymap_overrides: startup.keymap_overrides,
+            history: startup.history,
+            history_warning: startup.history_warning,
+            started: Instant::now(),
+        })
+        .detach();
+    app.widget().present();
+    wait_until(|| !app.model().panes.iter().any(|pane| pane.loading));
+    app.emit(AppMsg::SelectAllActive);
+    wait_until(|| app.model().pane(PaneId::Left).selection.len() == 3);
+    let selection = app.model().pane(PaneId::Left).selection.clone();
+    let sources = app.model().operation_sources(PaneId::Left);
+
+    let popover = open_tab(&app, PaneId::Left, 1, false);
+    assert!(visible_button(&popover, "Paste into folder").is_some());
+    assert!(visible_button(&popover, "Rename…").is_some());
+    assert!(visible_button(&popover, "Rename selected items…").is_none());
+    assert_eq!(app.model().pane(PaneId::Left).active_tab, 0);
+    snapshot(&app, &popover, "tab-folder-dark");
+    apply_appearance(AppearanceMode::Light);
+    snapshot(&app, &popover, "tab-folder-light");
+    apply_appearance(AppearanceMode::Dark);
+    find::<gtk::SearchEntry>(popover.upcast_ref())
+        .unwrap()
+        .set_text("copy path");
+    visible_button(&popover, "Copy path")
+        .unwrap()
+        .emit_clicked();
+    wait_until(|| popover.parent().is_none());
+    wait_until(|| app.model().folder_action_target.is_none());
+    // Drain the action forwarder before checking the clipboard.
+    wait_until(|| {
+        glib::MainContext::default()
+            .block_on(app.widget().clipboard().read_text_future())
+            .ok()
+            .flatten()
+            .as_deref()
+            == folder.to_str()
+    });
+    assert_eq!(app.model().operation_sources(PaneId::Left), sources);
+    assert_eq!(app.model().pane(PaneId::Left).selection, selection);
+
+    let popover = open_tab(&app, PaneId::Left, 1, true);
+    find::<gtk::SearchEntry>(popover.upcast_ref())
+        .unwrap()
+        .set_text("blue");
+    visible_button(&popover, "Set blue tag")
+        .unwrap()
+        .emit_clicked();
+    wait_until(|| {
+        app.model()
+            .tags
+            .get(&folder.display().to_string())
+            .map(String::as_str)
+            == Some("blue")
+    });
+    assert!(
+        !app.model()
+            .tags
+            .contains_key(&document.display().to_string())
+    );
+    assert!(app.model().folder_action_target.is_none());
+
+    let provider =
+        super::super::clipboard::provider(&[VPath::from(document.as_path())], false).unwrap();
+    app.widget()
+        .clipboard()
+        .set_content(Some(&provider))
+        .unwrap();
+    let popover = open_tab(&app, PaneId::Left, 1, false);
+    let paste = visible_button(&popover, "Paste into folder").unwrap();
+    wait_until(|| paste.is_sensitive());
+    paste.emit_clicked();
+    wait_until(|| folder.join("keep.txt").is_file() && app.model().active_operations == 0);
+    assert!(!other.join("keep.txt").exists());
+
+    let popover = open_tab(&app, PaneId::Left, 1, false);
+    visible_button(&popover, "Rename…").unwrap().emit_clicked();
+    wait_until(|| app.widget().visible_dialog().is_some());
+    let dialog = app.widget().visible_dialog().unwrap();
+    assert_eq!(
+        find::<gtk::Entry>(dialog.upcast_ref()).unwrap().text(),
+        "Inactive tab folder"
+    );
+    dialog.close();
+    wait_until(|| app.widget().visible_dialog().is_none());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&folder).unwrap().permissions().mode() & 0o7777;
+        let popover = open_tab(&app, PaneId::Left, 1, false);
+        find::<gtk::SearchEntry>(popover.upcast_ref())
+            .unwrap()
+            .set_text("permissions");
+        visible_button(&popover, "Permissions…")
+            .unwrap()
+            .emit_clicked();
+        wait_until(|| app.widget().visible_dialog().is_some());
+        let dialog = app.widget().visible_dialog().unwrap();
+        assert_eq!(
+            find::<gtk::Entry>(dialog.upcast_ref()).unwrap().text(),
+            format!("{mode:04o}")
+        );
+        dialog.close();
+        wait_until(|| app.widget().visible_dialog().is_none());
+    }
+
+    let popover = open_tab(&app, PaneId::Left, 1, false);
+    find::<gtk::SearchEntry>(popover.upcast_ref())
+        .unwrap()
+        .set_text("quick look");
+    visible_button(&popover, "Quick Look")
+        .unwrap()
+        .emit_clicked();
+    wait_until(|| {
+        app.model().quick_look_open
+            && app.model().preview_state.path.as_ref() == Some(&VPath::from(folder.as_path()))
+    });
+    app.emit(AppMsg::ToggleQuickLook);
+    wait_until(|| !app.model().quick_look_open && app.widget().visible_dialog().is_none());
+
+    let popover = open_tab(&app, PaneId::Left, 1, false);
+    find::<gtk::SearchEntry>(popover.upcast_ref())
+        .unwrap()
+        .set_text("create archive");
+    visible_button(&popover, "Create archive…")
+        .unwrap()
+        .emit_clicked();
+    wait_until(|| app.widget().visible_dialog().is_some());
+    let dialog = app.widget().visible_dialog().unwrap();
+    find::<gtk::Entry>(dialog.upcast_ref())
+        .unwrap()
+        .set_text("Tab archive");
+    app.emit(AppMsg::ActivatePane(PaneId::Right));
+    wait_until(|| app.model().active_pane == PaneId::Right);
+    dialog_response(&dialog, "Create").emit_clicked();
+    let archive_path = fixture.path().join("Tab archive.zip");
+    wait_until(|| archive_path.is_file() && app.model().active_operations == 0);
+    let mut archive = zip::ZipArchive::new(std::fs::File::open(archive_path).unwrap()).unwrap();
+    assert!(archive.by_name("Inactive tab folder/keep.txt").is_ok());
+    assert!(archive.by_name("keep.txt").is_err());
+
+    let popover = open_tab(&app, PaneId::Right, 0, false);
+    find::<gtk::SearchEntry>(popover.upcast_ref())
+        .unwrap()
+        .set_text("copy path");
+    visible_button(&popover, "Copy path")
+        .unwrap()
+        .emit_clicked();
+    wait_until(|| {
+        glib::MainContext::default()
+            .block_on(app.widget().clipboard().read_text_future())
+            .ok()
+            .flatten()
+            .as_deref()
+            == other.to_str()
+    });
+
+    let popover = open_tab(&app, PaneId::Left, 1, false);
+    visible_button(&popover, "Open in new tab")
+        .unwrap()
+        .emit_clicked();
+    wait_until(|| {
+        app.model().pane(PaneId::Left).tabs.len() == 3 && !app.model().pane(PaneId::Left).loading
+    });
+    assert_eq!(
+        app.model().pane(PaneId::Left).active().path,
+        VPath::from(folder.as_path())
+    );
+    app.emit(AppMsg::CloseTabAt(PaneId::Left, 2));
+    app.emit(AppMsg::SelectTab(PaneId::Left, 0));
+    wait_until(|| {
+        app.model().pane(PaneId::Left).active_tab == 0 && !app.model().pane(PaneId::Left).loading
+    });
+
+    let popover = open_tab(&app, PaneId::Left, 1, false);
+    find::<gtk::SearchEntry>(popover.upcast_ref())
+        .unwrap()
+        .set_text("delete permanently");
+    visible_button(&popover, "Delete permanently…")
+        .unwrap()
+        .emit_clicked();
+    wait_until(|| app.widget().visible_dialog().is_some());
+    let dialog = app.widget().visible_dialog().unwrap();
+    app.emit(AppMsg::ActivatePane(PaneId::Right));
+    wait_until(|| app.model().active_pane == PaneId::Right);
+    dialog_response(&dialog, "Delete").emit_clicked();
+    wait_until(|| !folder.exists() && app.model().active_operations == 0);
+    assert!(document.is_file());
+    assert!(other.join("also-keep.txt").is_file());
+    assert!(app.model().folder_action_target.is_none());
+    app.widget().close();
+}
+
+fn dialog_response(dialog: &adw::Dialog, label: &str) -> gtk::Button {
+    fn visit(widget: &gtk::Widget, label: &str) -> Option<gtk::Button> {
+        if let Some(button) = widget.downcast_ref::<gtk::Button>()
+            && button.label().as_deref() == Some(label)
+        {
+            return Some(button.clone());
+        }
+        let mut child = widget.first_child();
+        while let Some(widget) = child {
+            child = widget.next_sibling();
+            if let Some(button) = visit(&widget, label) {
+                return Some(button);
+            }
+        }
+        None
+    }
+    visit(dialog.upcast_ref(), label).unwrap()
+}
+
+fn open_tab(
+    app: &relm4::Controller<AppModel>,
+    pane: PaneId,
+    tab: usize,
+    keyboard: bool,
+) -> gtk::Popover {
+    let parent = app.widgets().panes[pane.index()].root.clone();
+    let mut pill = app.widgets().panes[pane.index()]
+        .tab_bar
+        .first_child()
+        .unwrap();
+    for _ in 0..tab {
+        pill = pill.next_sibling().unwrap();
+    }
+    wait_until(|| pill.width() > 0);
+    let controllers = pill.observe_controllers();
+    for index in 0..controllers.n_items() {
+        let controller = controllers.item(index).unwrap();
+        if keyboard {
+            if let Some(keys) = controller.downcast_ref::<gtk::EventControllerKey>() {
+                assert!(keys.emit_by_name::<bool>(
+                    "key-pressed",
+                    &[&gdk::Key::F10, &0_u32, &gdk::ModifierType::SHIFT_MASK]
+                ));
+            }
+        } else if let Some(gesture) = controller.downcast_ref::<gtk::GestureClick>()
+            && gesture.button() == 3
+        {
+            gesture.emit_by_name::<()>("pressed", &[&1_i32, &12.0_f64, &12.0_f64]);
+        }
+    }
+    let popover = parent.last_child().and_downcast::<gtk::Popover>().unwrap();
+    assert!(popover.has_css_class("file-context-menu"));
+    wait_until(|| popover.is_mapped());
+    popover
+}
+
 fn open(app: &relm4::Controller<AppModel>, target: Option<&(VPath, EntryKind)>) -> gtk::Popover {
     let view = app.widgets().panes[0].column_view.clone();
     wait_until(|| view.height() > 0);
@@ -341,7 +631,13 @@ fn snapshot(app: &relm4::Controller<AppModel>, popover: &gtk::Popover, name: &st
         popover.height() <= app.widget().height(),
         "Menu must fit the window height"
     );
-    let Some(directory) = std::env::var_os("COMMANDER_CONTEXT_SNAPSHOT_DIR") else {
+    let directory = std::env::var_os("COMMANDER_CONTEXT_SNAPSHOT_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("COMMANDER_TEST_ARTIFACTS")
+                .map(|path| std::path::PathBuf::from(path).join("snapshots"))
+        });
+    let Some(directory) = directory else {
         return;
     };
     let child = popover.first_child().unwrap();

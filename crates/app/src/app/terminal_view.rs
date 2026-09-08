@@ -708,22 +708,24 @@ impl TerminalWidgets {
         }
         surface.add_controller(drag);
 
-        let context_menu = gtk::Popover::new();
-        context_menu.add_css_class("context-menu");
-        context_menu.set_autohide(true);
-        context_menu.set_has_arrow(false);
+        let (context_menu, context_actions) = context_menu::context_action_menu();
         context_menu.set_parent(&surface);
-        let context_actions = gtk::Box::new(gtk::Orientation::Vertical, 2);
-        let copy = gtk::Button::with_label("Copy");
-        let paste = gtk::Button::with_label("Paste");
-        let select_all = gtk::Button::with_label("Select All");
-        let clear = gtk::Button::with_label("Clear Terminal");
-        for button in [&copy, &paste, &select_all, &clear] {
-            button.add_css_class("flat");
-            button.add_css_class("context-menu-item");
-            button.set_halign(gtk::Align::Fill);
+        let copy =
+            context_menu_item_button("Copy", "commander-copy-symbolic", Some("Ctrl+Shift+C"));
+        let paste = context_menu_item_button(
+            "Paste",
+            "commander-clipboard-symbolic",
+            Some("Ctrl+Shift+V"),
+        );
+        let select_all = context_menu_item_button("Select All", "commander-list-symbolic", None);
+        let clear = context_menu_item_button("Clear Terminal", "commander-circle-x-symbolic", None);
+        for button in [&copy, &paste, &select_all] {
             context_actions.append(button);
         }
+        let separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+        separator.add_css_class("context-menu-separator");
+        context_actions.append(&separator);
+        context_actions.append(&clear);
         {
             let active_screen = Rc::clone(&active_screen);
             let context_menu = context_menu.clone();
@@ -778,7 +780,6 @@ impl TerminalWidgets {
                 context_menu.popdown();
             });
         }
-        context_menu.set_child(Some(&context_actions));
         let context_click = gtk::GestureClick::new();
         context_click.set_button(3);
         {

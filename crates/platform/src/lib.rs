@@ -10,6 +10,8 @@ mod portable;
 #[cfg(unix)]
 mod unix;
 
+pub mod secure_delete;
+
 use std::path::PathBuf;
 
 /// Prepared XDG trash directories and a local deletion timestamp.

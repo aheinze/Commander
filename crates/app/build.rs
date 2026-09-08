@@ -1,6 +1,13 @@
 use std::{env, path::PathBuf, process::Command};
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=COMMANDER_UPDATE_PUBLIC_KEY");
+    if let Ok(key) = env::var("COMMANDER_UPDATE_PUBLIC_KEY") {
+        assert!(
+            key.len() == 64 && key.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "COMMANDER_UPDATE_PUBLIC_KEY must be a 32-byte Ed25519 public key in hexadecimal"
+        );
+    }
     println!("cargo:rerun-if-changed=assets/icons.gresource.xml");
     println!("cargo:rerun-if-changed=assets/icons");
     println!("cargo:rerun-if-changed=assets/branding/commander.svg");

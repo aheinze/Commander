@@ -36,7 +36,7 @@ struct Field {
     root: gtk::Box,
     content: gtk::Box,
     entry: gtk::Entry,
-    error: gtk::Label,
+    error: notifications::Feedback,
 }
 
 impl Field {
@@ -47,13 +47,8 @@ impl Field {
         entry.set_width_chars(1);
         entry.set_placeholder_text(Some(placeholder));
         entry.update_property(&[gtk::accessible::Property::Label(title)]);
-        let error = text("", "tool-field-error");
-        error.set_visible(false);
-        entry.update_relation(&[gtk::accessible::Relation::DescribedBy(
-            &[error.upcast_ref()],
-        )]);
+        let error = notifications::Feedback::default();
         content.append(&entry);
-        content.append(&error);
         let root = form_row(title, &content);
         root.add_css_class("tool-form-row");
         if let Some(label) = root.first_child() {
@@ -69,8 +64,11 @@ impl Field {
     }
 
     fn set_error(&self, error: Option<&str>) {
-        self.error.set_label(error.unwrap_or_default());
-        self.error.set_visible(error.is_some());
+        if let Some(error) = error {
+            self.error.error(error);
+        } else {
+            self.error.clear();
+        }
         if error.is_some() {
             self.entry.add_css_class("error");
         } else {
@@ -87,8 +85,7 @@ struct Manager {
     toolbar: gtk::Box,
     count: gtk::Label,
     add_empty: gtk::Button,
-    undo_bar: gtk::Box,
-    undo_label: gtk::Label,
+    undo_notice: RefCell<Option<adw::Toast>>,
     tools: RefCell<Vec<CustomToolSession>>,
     removed: RefCell<Option<(usize, CustomToolSession)>>,
     editing: Cell<Option<usize>>,
@@ -178,16 +175,6 @@ fn build(
     content.add_overlay(&empty);
     content.set_vexpand(true);
     body.append(&content);
-    let undo_bar = gtk::Box::new(gtk::Orientation::Horizontal, 10);
-    undo_bar.add_css_class("tool-undo");
-    let undo_label = text("", "tool-caption");
-    undo_label.set_hexpand(true);
-    let undo = gtk::Button::with_label("Undo");
-    undo.add_css_class("settings-link");
-    undo_bar.append(&undo_label);
-    undo_bar.append(&undo);
-    undo_bar.set_visible(false);
-    body.append(&undo_bar);
     page.append(&body);
     let footer = dialog_actions();
     let saved = text("Changes save automatically", "dialog-hint");
@@ -286,8 +273,7 @@ fn build(
         toolbar,
         count,
         add_empty,
-        undo_bar,
-        undo_label,
+        undo_notice: RefCell::new(None),
         tools: RefCell::new(tools),
         removed: RefCell::new(None),
         editing: Cell::new(None),
@@ -328,19 +314,6 @@ fn build(
     manager.save.connect_clicked(move |_| {
         if let Some(manager) = weak.upgrade() {
             manager.save_action();
-        }
-    });
-    let weak = Rc::downgrade(&manager);
-    undo.connect_clicked(move |_| {
-        if let Some(manager) = weak.upgrade() {
-            let removed = manager.removed.borrow_mut().take();
-            if let Some((index, tool)) = removed {
-                let index = index.min(manager.tools.borrow().len());
-                manager.tools.borrow_mut().insert(index, tool);
-                manager.publish();
-                manager.render();
-                manager.undo_bar.set_visible(false);
-            }
         }
     });
     for entry in [
@@ -491,13 +464,30 @@ impl Manager {
             remove.connect_clicked(move |_| {
                 if let Some(manager) = weak.upgrade() {
                     let tool = manager.tools.borrow_mut().remove(index);
-                    manager
-                        .undo_label
-                        .set_label(&format!("Removed “{}”", tool.name));
+                    let message = format!("Removed “{}”", tool.name);
+                    if let Some(previous) = manager.undo_notice.borrow_mut().take() {
+                        previous.dismiss();
+                    }
                     *manager.removed.borrow_mut() = Some((index, tool));
-                    manager.undo_bar.set_visible(true);
                     manager.publish();
                     manager.render();
+                    let weak = Rc::downgrade(&manager);
+                    manager.undo_notice.replace(notifications::action(
+                        notifications::Kind::Info,
+                        &message,
+                        "Undo",
+                        move || {
+                            if let Some(manager) = weak.upgrade() {
+                                let removed = manager.removed.borrow_mut().take();
+                                if let Some((index, tool)) = removed {
+                                    let index = index.min(manager.tools.borrow().len());
+                                    manager.tools.borrow_mut().insert(index, tool);
+                                    manager.publish();
+                                    manager.render();
+                                }
+                            }
+                        },
+                    ));
                 }
             });
             row.append(&remove);

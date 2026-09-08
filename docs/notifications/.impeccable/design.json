@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-08T17:55:51Z",
+  "title": "Design System: Commander notifications",
+  "extensions": {
+    "colorMeta": {
+      "carelo-toolbar": {
+        "role": "neutral",
+        "displayName": "Carelo toolbar surface"
+      },
+      "carelo-text": {
+        "role": "neutral",
+        "displayName": "Carelo foreground"
+      },
+      "carelo-muted": {
+        "role": "neutral",
+        "displayName": "Information icon"
+      },
+      "carelo-accent": {
+        "role": "primary",
+        "displayName": "Success icon"
+      },
+      "notification-error": {
+        "role": "error",
+        "displayName": "Error icon"
+      }
+    },
+    "shadows": [
+      {
+        "name": "toast",
+        "value": "0 4px 14px rgba(0, 0, 0, 0.22)",
+        "purpose": "Separate transient feedback from the working surface."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Toast content",
+      "kind": "custom",
+      "refersTo": "toast",
+      "description": "Content-only preview using the built-in dark defaults. Native libadwaita owns outer layout, action buttons, dismissal, and animation; this snippet does not recreate those controls.",
+      "html": "<div class=\"ds-toast-content\" role=\"status\"><svg class=\"ds-toast-icon\" viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path fill=\"currentColor\" d=\"M22.596 17.5 22.5982 17.5039Q23.4604 19.001 22.5968 20.4987Q21.7321 21.9982 20 22L4.009 22Q2.268 22.0156 1.3907 20.5117Q0.5134 19.0078 1.3818 17.5039L9.38 3.5069Q10.2419 1.9861 11.99 1.9861Q13.7381 1.9861 14.5982 3.5039ZM20.8618 18.4961 12.8618 4.4961Q12.5727 3.9861 11.99 3.9861Q11.4073 3.9861 11.12 4.4931L3.1182 18.4961Q2.8258 19.0026 3.1182 19.504Q3.4107 20.0053 3.991 20L20 20Q20.576 19.9994 20.8642 19.4996Q21.1525 18.9997 20.864 18.5Q20.8629 18.4981 20.8618 18.4961ZM13 9V13Q13 13.0985 12.9808 13.1951Q12.9616 13.2917 12.9239 13.3827Q12.8862 13.4737 12.8315 13.5556Q12.7767 13.6375 12.7071 13.7071Q12.6375 13.7767 12.5556 13.8315Q12.4737 13.8862 12.3827 13.9239Q12.2917 13.9616 12.1951 13.9808Q12.0985 14 12 14Q11.9015 14 11.8049 13.9808Q11.7083 13.9616 11.6173 13.9239Q11.5263 13.8862 11.4444 13.8315Q11.3625 13.7767 11.2929 13.7071Q11.2232 13.6375 11.1685 13.5556Q11.1138 13.4737 11.0761 13.3827Q11.0384 13.2917 11.0192 13.1951Q11 13.0985 11 13V9Q11 8.9015 11.0192 8.8049Q11.0384 8.7083 11.0761 8.6173Q11.1138 8.5263 11.1685 8.4444Q11.2232 8.3625 11.2929 8.2929Q11.3625 8.2232 11.4444 8.1685Q11.5263 8.1138 11.6173 8.0761Q11.7083 8.0384 11.8049 8.0192Q11.9015 8 12 8Q12.0985 8 12.1951 8.0192Q12.2917 8.0384 12.3827 8.0761Q12.4737 8.1138 12.5556 8.1685Q12.6375 8.2232 12.7071 8.2929Q12.7767 8.3625 12.8315 8.4444Q12.8862 8.5263 12.9239 8.6173Q12.9616 8.7083 12.9808 8.8049Q13 8.9015 13 9ZM12 16H12.01Q12.1085 16 12.2051 16.0192Q12.3017 16.0384 12.3927 16.0761Q12.4837 16.1138 12.5656 16.1685Q12.6475 16.2232 12.7171 16.2929Q12.7867 16.3625 12.8415 16.4444Q12.8962 16.5263 12.9339 16.6173Q12.9716 16.7083 12.9908 16.8049Q13.01 16.9015 13.01 17Q13.01 17.0985 12.9908 17.1951Q12.9716 17.2917 12.9339 17.3827Q12.8962 17.4737 12.8415 17.5556Q12.7867 17.6375 12.7171 17.7071Q12.6475 17.7767 12.5656 17.8315Q12.4837 17.8862 12.3927 17.9239Q12.3017 17.9616 12.2051 17.9808Q12.1085 18 12.01 18H12Q11.9015 18 11.8049 17.9808Q11.7083 17.9616 11.6173 17.9239Q11.5263 17.8862 11.4444 17.8315Q11.3625 17.7767 11.2929 17.7071Q11.2232 17.6375 11.1685 17.5556Q11.1138 17.4737 11.0761 17.3827Q11.0384 17.2917 11.0192 17.1951Q11 17.0985 11 17Q11 16.9015 11.0192 16.8049Q11.0384 16.7083 11.0761 16.6173Q11.1138 16.5263 11.1685 16.4444Q11.2232 16.3625 11.2929 16.2929Q11.3625 16.2232 11.4444 16.1685Q11.5263 16.1138 11.6173 16.0761Q11.7083 16.0384 11.8049 16.0192Q11.9015 16 12 16Z\"/></svg><span class=\"ds-toast-message\" aria-label=\"Error: Cannot open the folder: permission denied.\" title=\"Cannot open the folder: permission denied.\">Cannot open the folder: permission denied.</span></div>",
+      "css": ".ds-toast-content { display: flex; align-items: center; gap: 10px; padding: 4px 0; color: #e7e9ee; background: #202227; font-family: Inter, Cantarell, sans-serif; font-size: 13px; } .ds-toast-icon { width: 18px; height: 18px; flex-shrink: 0; color: #da5b62; } .ds-toast-message { min-width: 0; max-width: 58ch; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }"
+    }
+  ],
+  "narrative": {
+    "overview": "This scope documents transient feedback in the native GTK4/libadwaita application. Compact toasts float above the working surface without adding inline error or information rows. They inherit Commander's Carelo palette and bundled Lucide icons.",
+    "dos": [
+      "Do route transient errors, information, and completion feedback through the shared notification helpers, including dialog feedback.",
+      "Do keep normal counts, progress, metadata, static field instructions, durable reports, and safety confirmations in their existing content surfaces."
+    ],
+    "donts": [
+      "Don't add inline error or information rows, or open a modal merely to report a transient failure.",
+      "Don't use toast dismissal as a reason to erase invalid-field diagnostics or durable operation records."
+    ]
+  }
+}

@@ -217,132 +217,6 @@ pub(super) fn connect_remote_uri(
     });
 }
 
-pub(super) fn show_settings_dialog(
-    appearance: AppearanceMode,
-    color_theme: ColorTheme,
-    parallel_transfers: bool,
-    sender: &ComponentSender<AppModel>,
-) {
-    let Some(parent) = relm4::main_application().active_window() else {
-        return;
-    };
-    let (dialog, view) = utility_dialog("Settings", 440, -1, "settings-dialog");
-    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    content.add_css_class("dialog-body");
-    let intro = gtk::Label::new(Some("Tune the native appearance and transfer behavior."));
-    intro.set_xalign(0.0);
-    intro.set_wrap(true);
-    intro.add_css_class("dim-label");
-    content.append(&intro);
-    let label = gtk::Label::new(Some("Appearance"));
-    label.set_xalign(0.0);
-    label.add_css_class("dialog-eyebrow");
-    let appearance_picker = gtk::DropDown::from_strings(&["System", "Light", "Dark"]);
-    appearance_picker.set_selected(match appearance {
-        AppearanceMode::System => 0,
-        AppearanceMode::Light => 1,
-        AppearanceMode::Dark => 2,
-    });
-    content.append(&label);
-    content.append(&appearance_picker);
-    let theme_label = gtk::Label::new(Some("Color theme"));
-    theme_label.set_xalign(0.0);
-    theme_label.add_css_class("dialog-eyebrow");
-    let theme_picker = gtk::DropDown::from_strings(&[
-        "Automatic (Omarchy)",
-        "Carelo Graphite",
-        "Midnight Blue",
-        "Forest",
-        "Aubergine",
-    ]);
-    theme_picker.set_selected(match color_theme {
-        ColorTheme::Automatic => 0,
-        ColorTheme::Carelo => 1,
-        ColorTheme::Midnight => 2,
-        ColorTheme::Forest => 3,
-        ColorTheme::Aubergine => 4,
-    });
-    content.append(&theme_label);
-    content.append(&theme_picker);
-    let automatic_theme_hint = omarchy::current_theme_name().map_or_else(
-        || "Uses Carelo Graphite when an active Omarchy palette is not available.".to_owned(),
-        |name| format!("Following Omarchy’s {name} palette. Theme changes apply automatically."),
-    );
-    let theme_hint = gtk::Label::new(Some(&automatic_theme_hint));
-    theme_hint.set_xalign(0.0);
-    theme_hint.set_wrap(true);
-    theme_hint.add_css_class("dim-label");
-    content.append(&theme_hint);
-    let transfers_label = gtk::Label::new(Some("Transfers"));
-    transfers_label.set_xalign(0.0);
-    transfers_label.add_css_class("dialog-eyebrow");
-    content.append(&transfers_label);
-    let parallel = gtk::CheckButton::with_label("Parallel, storage-aware transfers");
-    parallel.set_active(parallel_transfers);
-    parallel.set_tooltip_text(Some(
-        "Disable to process file payloads sequentially while preserving the job queue",
-    ));
-    content.append(&parallel);
-    let custom_tools_button = gtk::Button::with_label("Manage Context Menu Tools…");
-    custom_tools_button.set_halign(gtk::Align::Start);
-    custom_tools_button.set_margin_top(6);
-    custom_tools_button.add_css_class("flat");
-    custom_tools_button.add_css_class("settings-link");
-    {
-        let input = sender.input_sender().clone();
-        custom_tools_button.connect_clicked(move |_| {
-            let _ = input.send(AppMsg::ManageCustomTools);
-        });
-    }
-    content.append(&custom_tools_button);
-    let shortcuts = gtk::Label::new(Some(
-        "Shortcut overrides can be placed in Commander's keymaps.toml file. Press F1 to inspect the active map.",
-    ));
-    shortcuts.set_wrap(true);
-    shortcuts.set_xalign(0.0);
-    shortcuts.add_css_class("dim-label");
-    content.append(&shortcuts);
-    root.append(&content);
-    let actions = dialog_actions();
-    let cancel = gtk::Button::with_label("Cancel");
-    let apply = gtk::Button::with_label("Apply");
-    apply.add_css_class("suggested-action");
-    actions.append(&cancel);
-    actions.append(&apply);
-    root.append(&actions);
-    view.set_content(Some(&root));
-    {
-        let dialog = dialog.clone();
-        cancel.connect_clicked(move |_| {
-            dialog.close();
-        });
-    }
-    let input = sender.input_sender().clone();
-    let response_dialog = dialog.clone();
-    apply.connect_clicked(move |_| {
-        let appearance = match appearance_picker.selected() {
-            0 => AppearanceMode::System,
-            1 => AppearanceMode::Light,
-            _ => AppearanceMode::Dark,
-        };
-        let color_theme = match theme_picker.selected() {
-            1 => ColorTheme::Carelo,
-            2 => ColorTheme::Midnight,
-            3 => ColorTheme::Forest,
-            4 => ColorTheme::Aubergine,
-            _ => ColorTheme::Automatic,
-        };
-        let _ = input.send(AppMsg::SetSettings {
-            appearance,
-            color_theme,
-            parallel_transfers: parallel.is_active(),
-        });
-        response_dialog.close();
-    });
-    dialog.present(Some(&parent));
-}
-
 pub(super) fn show_custom_tools_dialog(
     tools: Vec<CustomToolSession>,
     sender: &ComponentSender<AppModel>,
@@ -418,8 +292,8 @@ pub(super) fn show_shortcut_reference(keymap: &Keymap) {
 
 /// A floating sheet with a flat header bar, shared by the utility dialogs.
 ///
-/// The header bar inherits the dialog title and its close button; Escape closes
-/// the sheet for free.
+/// The header inherits the title and shares the main window's close control;
+/// Escape closes the sheet for free.
 pub(super) fn utility_dialog(
     title: &str,
     width: i32,
@@ -437,8 +311,8 @@ pub(super) fn utility_dialog(
     dialog.add_css_class("utility-dialog");
     dialog.add_css_class(class);
     let view = adw::ToolbarView::new();
-    view.add_top_bar(&adw::HeaderBar::new());
-    dialog.set_child(Some(&view));
+    view.add_top_bar(&chrome::dialog_header(&dialog));
+    dialog.set_child(Some(&notifications::wrap(&view)));
     (dialog, view)
 }
 
@@ -478,7 +352,7 @@ pub(super) fn show_new_file_dialog(sender: &ComponentSender<AppModel>) {
     entry.select_region(0, -1);
 }
 
-pub(super) fn show_create_archive_dialog(sender: &ComponentSender<AppModel>) {
+pub(super) fn show_create_archive_dialog(input: relm4::Sender<AppMsg>) {
     let Some(window) = relm4::main_application().active_window() else {
         return;
     };
@@ -500,7 +374,6 @@ pub(super) fn show_create_archive_dialog(sender: &ComponentSender<AppModel>) {
     content.append(&name);
     content.append(&format);
     dialog.set_extra_child(Some(&content));
-    let input = sender.input_sender().clone();
     let response_name = name.clone();
     dialog.connect_response(Some("create"), move |_, _| {
         let format = match format.selected() {
@@ -684,138 +557,7 @@ pub(super) fn show_rename_dialog(source: VPath, sender: &ComponentSender<AppMode
 }
 
 pub(super) fn show_batch_rename_dialog(sources: Vec<VPath>, sender: &ComponentSender<AppModel>) {
-    let Some(window) = relm4::main_application().active_window() else {
-        return;
-    };
-    let dialog = AlertSheet::new(
-        Some("Batch Rename"),
-        Some(&format!(
-            "Rename {} selected items with a shared rule.",
-            sources.len()
-        )),
-    );
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("rename", "Rename Items");
-    dialog.set_close_response("cancel");
-    dialog.set_default_response(Some("rename"));
-    dialog.set_response_appearance("rename", adw::ResponseAppearance::Suggested);
-
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    content.set_size_request(500, -1);
-    let method = gtk::DropDown::from_strings(&["Replace", "Add Text", "Number", "Change Case"]);
-    content.append(&form_row("Method", &method));
-
-    let replace_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    let find = gtk::Entry::new();
-    find.set_placeholder_text(Some("Text to find"));
-    let replacement = gtk::Entry::new();
-    replacement.set_placeholder_text(Some("Replacement"));
-    let match_case = gtk::CheckButton::with_label("Match case");
-    replace_box.append(&form_row("Find", &find));
-    replace_box.append(&form_row("Replace", &replacement));
-    replace_box.append(&match_case);
-    content.append(&replace_box);
-
-    let add_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    let prefix = gtk::Entry::new();
-    prefix.set_placeholder_text(Some("Prefix"));
-    let suffix = gtk::Entry::new();
-    suffix.set_placeholder_text(Some("Suffix"));
-    add_box.append(&form_row("Prefix", &prefix));
-    add_box.append(&form_row("Suffix", &suffix));
-    add_box.set_visible(false);
-    content.append(&add_box);
-
-    let number_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    let template = gtk::Entry::new();
-    template.set_text("{name} {n}");
-    template.set_tooltip_text(Some(
-        "Use {name} for the original name and {n} for the number",
-    ));
-    let start = gtk::SpinButton::with_range(0.0, 999_999.0, 1.0);
-    start.set_value(1.0);
-    let padding = gtk::SpinButton::with_range(1.0, 8.0, 1.0);
-    padding.set_value(2.0);
-    number_box.append(&form_row("Template", &template));
-    number_box.append(&form_row("Start", &start));
-    number_box.append(&form_row("Digits", &padding));
-    number_box.set_visible(false);
-    content.append(&number_box);
-
-    let case_box = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    let case_mode = gtk::DropDown::from_strings(&["lowercase", "UPPERCASE", "Title Case"]);
-    case_box.append(&form_row("Case", &case_mode));
-    case_box.set_visible(false);
-    content.append(&case_box);
-    let keep_extensions = gtk::CheckButton::with_label("Keep file extensions unchanged");
-    keep_extensions.set_active(true);
-    content.append(&keep_extensions);
-    let preview = gtk::Label::new(Some(
-        "Replace text, add a prefix/suffix, append a sequence, or normalize casing.",
-    ));
-    preview.set_wrap(true);
-    preview.set_xalign(0.0);
-    preview.add_css_class("dim-label");
-    content.append(&preview);
-    dialog.set_extra_child(Some(&content));
-
-    {
-        let replace_box = replace_box.clone();
-        let add_box = add_box.clone();
-        let number_box = number_box.clone();
-        let case_box = case_box.clone();
-        method.connect_selected_notify(move |method| {
-            let selected = method.selected();
-            replace_box.set_visible(selected == 0);
-            add_box.set_visible(selected == 1);
-            number_box.set_visible(selected == 2);
-            case_box.set_visible(selected == 3);
-        });
-    }
-    let input = sender.input_sender().clone();
-    let response_find = find.clone();
-    dialog.connect_response(Some("rename"), move |_, _| {
-        let selected = method.selected();
-        let keep_extensions = keep_extensions.is_active();
-        let padding = usize::try_from(padding.value_as_int()).unwrap_or(2);
-        let start_number = start.value_as_int();
-        let items = sources
-            .iter()
-            .enumerate()
-            .map(|(index, source)| {
-                let original = source
-                    .file_name()
-                    .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
-                let (stem, extension) = split_extension(&original, keep_extensions);
-                let next_stem = match selected {
-                    0 => replace_text(
-                        &stem,
-                        &response_find.text(),
-                        &replacement.text(),
-                        match_case.is_active(),
-                    ),
-                    1 => format!("{}{}{}", prefix.text(), stem, suffix.text()),
-                    2 => {
-                        let number = i64::from(start_number) + i64::try_from(index).unwrap_or(0);
-                        template
-                            .text()
-                            .replace("{name}", &stem)
-                            .replace("{n}", &format!("{number:0padding$}"))
-                    }
-                    3 => match case_mode.selected() {
-                        1 => stem.to_uppercase(),
-                        2 => title_case(&stem),
-                        _ => stem.to_lowercase(),
-                    },
-                    _ => stem,
-                };
-                (source.clone(), format!("{next_stem}{extension}"))
-            })
-            .collect();
-        let _ = input.send(AppMsg::BatchRename(items));
-    });
-    dialog.present(Some(&window));
-    find.grab_focus();
+    batch_rename_view::show(sources, sender);
 }
 
 pub(super) fn form_row(label: &str, child: &impl IsA<gtk::Widget>) -> gtk::Box {
@@ -1200,7 +942,10 @@ pub(super) fn show_checksum_result(path: &VPath, result: Result<String, String>)
             dialog.set_extra_child(Some(&value));
             dialog
         }
-        Err(error) => AlertSheet::new(Some("Checksum Failed"), Some(&error)),
+        Err(error) => {
+            notifications::error(&format!("Checksum failed: {error}"));
+            return;
+        }
     };
     dialog.add_response("close", "Close");
     dialog.set_close_response("close");
@@ -1245,14 +990,17 @@ pub(super) fn show_checksum_comparison(
             dialog.set_extra_child(Some(&values));
             dialog
         }
-        Err(error) => AlertSheet::new(Some("Checksum Comparison Failed"), Some(&error)),
+        Err(error) => {
+            notifications::error(&format!("Checksum comparison failed: {error}"));
+            return;
+        }
     };
     dialog.add_response("close", "Close");
     dialog.set_close_response("close");
     dialog.present(Some(&window));
 }
 
-pub(super) fn show_permanent_delete_dialog(count: usize, sender: &ComponentSender<AppModel>) {
+pub(super) fn show_permanent_delete_dialog(count: usize, input: relm4::Sender<AppMsg>) {
     let Some(window) = relm4::main_application().active_window() else {
         return;
     };
@@ -1264,7 +1012,6 @@ pub(super) fn show_permanent_delete_dialog(count: usize, sender: &ComponentSende
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("cancel"));
     dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
-    let input = sender.input_sender().clone();
     dialog.connect_response(Some("delete"), move |_, _| {
         let _ = input.send(AppMsg::DeletePermanentConfirmed);
     });

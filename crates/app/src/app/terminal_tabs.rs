@@ -153,13 +153,10 @@ impl TerminalTabs {
             .valign(gtk::Align::Center)
             .build();
         menu.add_css_class("terminal-menu");
-        let popover = gtk::Popover::new();
-        popover.add_css_class("context-menu");
-        popover.set_has_arrow(false);
-        let close_all = gtk::Button::with_label("Close all terminals");
-        close_all.add_css_class("context-menu-item");
-        close_all.add_css_class("flat");
-        popover.set_child(Some(&close_all));
+        let (popover, menu_actions) = context_menu::context_action_menu();
+        let close_all =
+            context_menu_item_button("Close all terminals", "commander-x-symbolic", None);
+        menu_actions.append(&close_all);
         menu.set_popover(Some(&popover));
         for (button, create) in [(&new, true), (&hide, false)] {
             button.add_css_class("flat");
@@ -412,6 +409,21 @@ mod tests {
             .unwrap();
     }
 
+    fn snapshot_menu(menu: &gtk::Popover, name: &str) {
+        drain_frames();
+        let Some(directory) = std::env::var_os("COMMANDER_TERMINAL_SNAPSHOT_DIR") else {
+            return;
+        };
+        let child = menu.first_child().unwrap();
+        let snapshot = gtk::Snapshot::new();
+        menu.snapshot_child(&child, &snapshot);
+        menu.renderer()
+            .unwrap()
+            .render_texture(snapshot.to_node().unwrap(), None)
+            .save_to_png(std::path::Path::new(&directory).join(format!("{name}.png")))
+            .unwrap();
+    }
+
     #[test]
     #[ignore = "requires an isolated GTK session and SHELL=/bin/sh; run alone with --ignored --test-threads=1"]
     fn gtk_terminal_tabs_focus_overflow_and_lifecycle() {
@@ -471,6 +483,38 @@ mod tests {
                 .contains("terminal tab one")
         });
         let first = app.model().terminal_tabs[0].id;
+        let options = app
+            .widgets()
+            .terminal
+            .tabs
+            .close_all
+            .ancestor(gtk::Popover::static_type())
+            .and_downcast::<gtk::Popover>()
+            .unwrap();
+        let terminal_menu = app
+            .widgets()
+            .terminal
+            .surface
+            .first_child()
+            .and_downcast::<gtk::Popover>()
+            .unwrap();
+        for (appearance, name) in [
+            (AppearanceMode::Dark, "dark"),
+            (AppearanceMode::Light, "light"),
+        ] {
+            apply_appearance(appearance);
+            options.popup();
+            wait_until(|| options.is_mapped());
+            snapshot_menu(&options, &format!("terminal-options-{name}"));
+            options.popdown();
+            terminal_menu.popup();
+            wait_until(|| terminal_menu.is_mapped());
+            snapshot_menu(&terminal_menu, &format!("terminal-context-{name}"));
+            terminal_menu.popdown();
+        }
+        apply_appearance(AppearanceMode::Dark);
+        app.widgets().terminal.surface.grab_focus();
+        drain_frames();
         let first_widget = app.widgets().terminal.tabs.rows.borrow()[&first]
             .root
             .clone();

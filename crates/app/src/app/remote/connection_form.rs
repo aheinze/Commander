@@ -6,6 +6,7 @@ pub(super) struct ConnectionForm(Rc<FormWidgets>);
 
 struct FormWidgets {
     root: gtk::Box,
+    name: gtk::Entry,
     protocol: gtk::DropDown,
     host: gtk::Entry,
     port: gtk::Entry,
@@ -21,8 +22,9 @@ struct FormWidgets {
     named: gtk::Box,
     remember: gtk::DropDown,
     hint: gtk::Label,
-    status: gtk::Label,
+    status: notifications::Feedback,
     connect: glib::WeakRef<gtk::Button>,
+    save_only: RefCell<Option<glib::WeakRef<gtk::Button>>>,
     loading: Cell<bool>,
 }
 
@@ -31,6 +33,9 @@ impl ConnectionForm {
         let root = gtk::Box::new(gtk::Orientation::Vertical, 8);
         root.add_css_class("dialog-body");
         root.add_css_class("remote-form");
+        let name = entry("Optional · shown in the sidebar");
+        name.set_tooltip_text(Some("Leave blank to use the server address"));
+        root.append(&field_row("Name", &name).0);
         let protocol =
             gtk::DropDown::from_strings(&PROTOCOLS.iter().map(|p| p.label).collect::<Vec<_>>());
         root.append(&field_row("Connection", &protocol).0);
@@ -78,12 +83,10 @@ impl ConnectionForm {
         root.append(&auth);
         let hint = caption();
         root.append(&hint);
-        let status = caption();
-        status.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-        status.set_wrap(false);
-        root.append(&status);
+        let status = notifications::Feedback::default();
         let form = Self(Rc::new(FormWidgets {
             root,
+            name,
             protocol,
             host,
             port,
@@ -101,6 +104,7 @@ impl ConnectionForm {
             hint,
             status,
             connect: connect.downgrade(),
+            save_only: RefCell::new(None),
             loading: Cell::new(false),
         }));
         form.connect_signals();
@@ -116,9 +120,35 @@ impl ConnectionForm {
         self.0.password.set_text("");
     }
 
+    pub fn name(&self) -> String {
+        self.0.name.text().trim().to_owned()
+    }
+
+    pub fn set_name(&self, name: &str) {
+        self.0.name.set_text(name);
+    }
+
+    pub fn set_save_button(&self, button: &gtk::Button) {
+        self.0.save_only.replace(Some(button.downgrade()));
+        self.update();
+    }
+
     fn set_ready(&self, ready: bool) {
         if let Some(button) = self.0.connect.upgrade() {
             button.set_sensitive(ready);
+        }
+        if let Some(button) = self
+            .0
+            .save_only
+            .borrow()
+            .as_ref()
+            .and_then(glib::WeakRef::upgrade)
+        {
+            let has_password = !self.0.password.text().is_empty();
+            button.set_sensitive(ready && !has_password);
+            button.set_tooltip_text(has_password.then_some(
+                "Choose Save and connect to use the password and its storage preference",
+            ));
         }
     }
 
@@ -226,7 +256,7 @@ impl ConnectionForm {
         let fields = match ConnectionFields::parse(uri) {
             Ok(fields) => fields,
             Err(error) => {
-                self.0.status.set_label(error);
+                self.0.status.validate(Some(error), &self.0.host);
                 self.set_ready(false);
                 return;
             }
@@ -285,17 +315,13 @@ impl ConnectionForm {
         });
         match self.connection() {
             Ok(connection) => {
-                w.status.set_label(&connection.uri);
-                w.status.set_tooltip_text(Some(&connection.uri));
+                w.status.validate(None, &w.host);
+                w.host.set_tooltip_text(Some(&connection.uri));
                 self.set_ready(true);
             }
             Err(error) => {
-                w.status.set_label(if w.host.text().is_empty() {
-                    "Choose a server below or enter its details."
-                } else {
-                    error
-                });
-                w.status.set_tooltip_text(None);
+                w.status
+                    .validate((!w.host.text().is_empty()).then_some(error), &w.host);
                 self.set_ready(false);
             }
         }
@@ -413,7 +439,7 @@ mod tests {
                 .as_deref(),
             Some("test-password")
         );
-        assert!(!form.0.status.label().contains("test-password"));
+        assert!(!form.0.status.text().contains("test-password"));
         assert!(form.0.anonymous.is_visible());
         assert!(!form.0.domain_row.is_visible());
         snapshot(&view, "ftp");

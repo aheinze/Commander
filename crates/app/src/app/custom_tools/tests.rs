@@ -104,7 +104,7 @@ fn gtk_custom_tools_add_edit_toggle_undo_and_reopen() {
         }
     }
     manager.save.emit_clicked();
-    assert!(manager.name.error.is_visible() && manager.command.error.is_visible());
+    assert!(!manager.name.error.text().is_empty() && !manager.command.error.text().is_empty());
     assert!(app.model().custom_tools.is_empty());
     manager.name.entry.set_text("Open in image editor");
     manager.command.entry.set_text("gimp");
@@ -132,7 +132,7 @@ fn gtk_custom_tools_add_edit_toggle_undo_and_reopen() {
     manager.name.entry.set_text("Open images");
     manager.command.entry.set_text("gimp \"%paths%");
     manager.save.emit_clicked();
-    assert!(manager.command.error.is_visible());
+    assert!(!manager.command.error.text().is_empty());
     assert_eq!(app.model().custom_tools[0].name, "Open in image editor");
     snapshot(&dialog, "tools-validation");
     manager.command.entry.set_text("gimp %paths%");
@@ -156,10 +156,9 @@ fn gtk_custom_tools_add_edit_toggle_undo_and_reopen() {
     apply_appearance(AppearanceMode::Dark);
     button_with_tip(&manager.list, "Remove Open images").emit_clicked();
     wait_until(|| app.model().custom_tools.len() == 1);
-    assert!(manager.undo_bar.is_visible());
-    find::<gtk::Button>(manager.undo_bar.upcast_ref())
-        .unwrap()
-        .emit_clicked();
+    let toast = manager.undo_notice.borrow().clone().unwrap();
+    assert_eq!(toast.button_label().as_deref(), Some("Undo"));
+    toast.emit_by_name::<()>("button-clicked", &[]);
     wait_until(|| app.model().custom_tools.len() == 2);
     assert_eq!(app.model().custom_tools[0].name, "Open images");
     assert!(!app.model().custom_tools[0].enabled);

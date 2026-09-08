@@ -201,6 +201,7 @@ pub(super) struct PaneWidgets {
     pub(super) breadcrumb_box: gtk::Box,
     pub(super) breadcrumb_overflow: gtk::MenuButton,
     pub(super) path_entry: gtk::Entry,
+    location_display: String,
     location_focus: gtk::EventControllerFocus,
     pub(super) sort_dropdown: gtk::DropDown,
     pub(super) sort_direction: gtk::Button,
@@ -225,6 +226,7 @@ pub(super) struct PaneWidgets {
     pub(super) miller_reveal_pending: Rc<Cell<bool>>,
     pub(super) miller_columns: Vec<MillerColumnWidgets>,
     pub(super) status: gtk::Label,
+    pub(super) git: pane_git::GitStatusWidgets,
     pub(super) spinner: gtk::Spinner,
     pub(super) rendered_revision: u64,
     pub(super) rendered_metadata_revision: u64,
@@ -431,7 +433,15 @@ impl PaneWidgets {
         breadcrumb_scrolled
             .hadjustment()
             .connect_changed(|adjustment| {
-                adjustment.set_value((adjustment.upper() - adjustment.page_size()).max(0.0));
+                // Finish the viewport allocation before scrolling to the current folder.
+                // Updating synchronously can leave its child at the previous offset.
+                let adjustment = adjustment.downgrade();
+                glib::idle_add_local_once(move || {
+                    if let Some(adjustment) = adjustment.upgrade() {
+                        adjustment
+                            .set_value((adjustment.upper() - adjustment.page_size()).max(0.0));
+                    }
+                });
             });
         let breadcrumb_overflow = gtk::MenuButton::new();
         breadcrumb_overflow.add_css_class("flat");
@@ -774,6 +784,22 @@ impl PaneWidgets {
         status.set_width_chars(1);
         status_box.append(&spinner);
         status_box.append(&status);
+        let git = pane_git::GitStatusWidgets::new();
+        status_box.append(&git.root);
+        let terminal = icon_button(
+            "commander-terminal-symbolic",
+            "Open this folder in a new terminal",
+        );
+        terminal.add_css_class("pane-status-action");
+        terminal.set_valign(gtk::Align::Center);
+        {
+            let input = sender.input_sender().clone();
+            terminal.connect_clicked(move |_| {
+                let _ = input.send(AppMsg::ActivatePane(pane));
+                let _ = input.send(AppMsg::NewTerminal);
+            });
+        }
+        status_box.append(&terminal);
         root.append(&status_box);
 
         Self {
@@ -785,6 +811,7 @@ impl PaneWidgets {
             breadcrumb_box,
             breadcrumb_overflow,
             path_entry,
+            location_display: String::new(),
             location_focus,
             sort_dropdown,
             sort_direction,
@@ -808,6 +835,7 @@ impl PaneWidgets {
             miller_reveal_pending: Rc::default(),
             miller_columns: Vec::new(),
             status,
+            git,
             spinner,
             rendered_revision: u64::MAX,
             rendered_metadata_revision: u64::MAX,
@@ -844,9 +872,7 @@ impl PaneWidgets {
     }
 
     pub(super) fn focus_location(&self) {
-        if let Some(path) = self.pane_drag.borrow().current_directory.as_ref() {
-            self.path_entry.set_text(&path.to_string());
-        }
+        self.path_entry.set_text(&self.location_display);
         self.breadcrumb_stack.set_visible_child_name("location");
         self.path_entry.grab_focus();
         self.path_entry.select_region(0, -1);
@@ -880,6 +906,7 @@ impl PaneWidgets {
         active: bool,
         started: Instant,
         tags_revision: u64,
+        archives: &archive_browser::ArchiveLocations,
         sender: &ComponentSender<AppModel>,
     ) {
         let render_started = Instant::now();
@@ -916,7 +943,8 @@ impl PaneWidgets {
                 self.root.add_css_class("pane-inactive");
             }
         }
-        let path = state.current_directory().to_string();
+        let path = archives.display(state.current_directory()).to_string();
+        self.location_display.clone_from(&path);
         if !self.location_focus.contains_focus() && self.path_entry.text().as_str() != path {
             self.path_entry.set_text(&path);
             self.path_entry.set_position(0);
@@ -928,19 +956,14 @@ impl PaneWidgets {
             while let Some(child) = self.breadcrumb_box.first_child() {
                 self.breadcrumb_box.remove(&child);
             }
-            let mut ancestors = Vec::new();
-            let mut cursor = Some(state.current_directory().clone());
-            while let Some(current) = cursor {
-                cursor = current.parent().filter(|parent| parent != &current);
-                ancestors.push(current);
-            }
-            ancestors.reverse();
+            let ancestors = archives.ancestors(state.current_directory());
             let parents = gtk::ListBox::new();
             parents.set_selection_mode(gtk::SelectionMode::Single);
             parents.set_activate_on_single_click(true);
             let destinations: Vec<_> = ancestors.iter().rev().skip(1).cloned().collect();
             for destination in &destinations {
-                let label = gtk::Label::new(Some(&destination.to_string()));
+                let display = archives.display(destination).to_string();
+                let label = gtk::Label::new(Some(&display));
                 label.set_xalign(0.0);
                 label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
                 label.set_max_width_chars(36);
@@ -950,8 +973,8 @@ impl PaneWidgets {
                 label.set_margin_bottom(7);
                 let row = gtk::ListBoxRow::new();
                 row.set_child(Some(&label));
-                row.set_tooltip_text(Some(&destination.to_string()));
-                row.update_property(&[gtk::accessible::Property::Label(&destination.to_string())]);
+                row.set_tooltip_text(Some(&display));
+                row.update_property(&[gtk::accessible::Property::Label(&display)]);
                 parents.append(&row);
             }
             let popover = gtk::Popover::new();
@@ -989,11 +1012,17 @@ impl PaneWidgets {
                     separator.add_css_class("breadcrumb-separator");
                     self.breadcrumb_box.append(&separator);
                 }
-                let label = ancestor
+                let display = archives.display(&ancestor);
+                let label = display
                     .file_name()
                     .map(display_name)
                     .unwrap_or_else(|| "/".to_owned());
                 let content = gtk::Box::new(gtk::Orientation::Horizontal, 5);
+                if archives.is_root(&ancestor) {
+                    let icon = gtk::Image::from_icon_name("commander-archive-symbolic");
+                    icon.set_pixel_size(13);
+                    content.append(&icon);
+                }
                 if let Some(color) = self.tag_store.borrow().get(&ancestor.to_string()) {
                     let indicator = tag_indicator();
                     apply_tag_indicator(&indicator, Some(color));
@@ -1013,8 +1042,8 @@ impl PaneWidgets {
                 button.add_css_class("flat");
                 button.add_css_class("breadcrumb-button");
                 button.set_child(Some(&content));
-                button.set_tooltip_text(Some(&ancestor.to_string()));
-                button.update_property(&[gtk::accessible::Property::Label(&ancestor.to_string())]);
+                button.set_tooltip_text(Some(&display.to_string()));
+                button.update_property(&[gtk::accessible::Property::Label(&display.to_string())]);
                 if &ancestor == state.current_directory() {
                     button.add_css_class("current-folder");
                 }
@@ -1034,7 +1063,8 @@ impl PaneWidgets {
                 self.breadcrumb_box.append(&button);
             }
         }
-        let spinning = state.loading;
+        let opening_archive = state.archive_browse.source.as_ref();
+        let spinning = state.loading || opening_archive.is_some();
         if self.rendered_spinner != Some(spinning) {
             self.rendered_spinner = Some(spinning);
             self.spinner.set_spinning(spinning);
@@ -1049,7 +1079,16 @@ impl PaneWidgets {
                 }
             },
         );
-        let loading_overlay = (state.loading, loading_text);
+        let loading_text = opening_archive.map_or(loading_text, |source| {
+            format!(
+                "Opening {}… · Esc to cancel",
+                source
+                    .file_name()
+                    .map(display_name)
+                    .unwrap_or_else(|| "archive".to_owned())
+            )
+        });
+        let loading_overlay = (spinning, loading_text);
         if self.rendered_loading_overlay.as_ref() != Some(&loading_overlay) {
             self.loading_label.set_label(&loading_overlay.1);
             self.loading_revealer.set_reveal_child(loading_overlay.0);
@@ -1065,8 +1104,14 @@ impl PaneWidgets {
             .error
             .as_ref()
             .or_else(|| miller_column.and_then(|column| column.error.as_ref()));
-        let status = if let Some(error) = status_error {
-            format!("Could not open directory: {error}")
+        let mut status = if let Some(source) = opening_archive {
+            format!(
+                "Opening {}… · Esc to cancel",
+                source
+                    .file_name()
+                    .map(display_name)
+                    .unwrap_or_else(|| "archive".to_owned())
+            )
         } else if let Some(listing) = status_listing {
             if listing.is_complete() {
                 let item_count = if state.filter_query.is_empty()
@@ -1086,14 +1131,20 @@ impl PaneWidgets {
             } else {
                 format!("Loading… {} items", listing.len())
             }
+        } else if status_error.is_some() {
+            String::new()
         } else {
             "Loading…".to_owned()
         };
+        if archives.contains(state.current_directory()) && opening_archive.is_none() {
+            status.push_str(" · Archive · read-only");
+        }
         if self.rendered_status != status {
             self.rendered_status.clone_from(&status);
             self.status.set_label(&status);
             self.status.set_tooltip_text(Some(&status));
         }
+        self.git.render(state.git.info.as_ref());
         if self.rendered_view_mode != Some(state.view_mode) {
             self.rendered_view_mode = Some(state.view_mode);
             self.view_stack
@@ -1105,7 +1156,7 @@ impl PaneWidgets {
         }
         if self.rendered_miller_revision != state.miller_revision || tags_changed {
             self.rendered_miller_revision = state.miller_revision;
-            self.render_miller(state, active, tags_changed, sender);
+            self.render_miller(state, active, tags_changed, archives, sender);
         }
         if active && self.rendered_focus_files_epoch != state.focus_files_epoch {
             self.rendered_focus_files_epoch = state.focus_files_epoch;
@@ -1149,7 +1200,7 @@ impl PaneWidgets {
 
         if self.rendered_tabs_revision != state.tabs_revision || tags_changed {
             self.rendered_tabs_revision = state.tabs_revision;
-            self.render_tabs(state, sender);
+            self.render_tabs(state, archives, sender);
         }
         if self.rendered_revision != state.revision {
             if self.rendered_scroll_restore != state.scroll_restore_epoch {
@@ -1331,6 +1382,7 @@ impl PaneWidgets {
         state: &PaneState,
         active: bool,
         tags_changed: bool,
+        archives: &archive_browser::ArchiveLocations,
         sender: &ComponentSender<AppModel>,
     ) {
         if state.miller_columns.len() > self.rendered_miller_columns {
@@ -1373,10 +1425,16 @@ impl PaneWidgets {
             body.set_overflow(gtk::Overflow::Hidden);
             let heading = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             heading.add_css_class("miller-column-heading");
-            heading.append(&gtk::Image::from_icon_name("commander-folder-symbolic"));
+            heading.append(&gtk::Image::from_icon_name(
+                if archives.is_root(&column.path) {
+                    "commander-archive-symbolic"
+                } else {
+                    "commander-folder-symbolic"
+                },
+            ));
+            let display = archives.display(&column.path);
             let title = gtk::Label::new(Some(
-                &column
-                    .path
+                &display
                     .file_name()
                     .map_or_else(|| "File System".to_owned(), display_name),
             ));
@@ -1385,7 +1443,7 @@ impl PaneWidgets {
             title.set_width_chars(1);
             title.set_max_width_chars(1);
             title.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
-            heading.set_tooltip_text(Some(&column.path.to_string()));
+            heading.set_tooltip_text(Some(&display.to_string()));
             let count = gtk::Label::new(None);
             count.add_css_class("miller-column-count");
             heading.append(&title);
@@ -1408,12 +1466,13 @@ impl PaneWidgets {
                 icon.set_pixel_size(28);
                 placeholder.append(&icon);
             }
-            let message =
-                gtk::Label::new(Some(column.error.as_deref().unwrap_or(if column.loading {
-                    "Loading…"
-                } else {
-                    "This folder is empty"
-                })));
+            let message = gtk::Label::new(Some(if column.error.is_some() {
+                ""
+            } else if column.loading {
+                "Loading…"
+            } else {
+                "This folder is empty"
+            }));
             message.set_wrap(true);
             message.set_wrap_mode(gtk::pango::WrapMode::WordChar);
             message.set_width_chars(1);
@@ -1740,13 +1799,18 @@ impl PaneWidgets {
         }
     }
 
-    pub(super) fn render_tabs(&self, state: &PaneState, sender: &ComponentSender<AppModel>) {
+    pub(super) fn render_tabs(
+        &self,
+        state: &PaneState,
+        archives: &archive_browser::ArchiveLocations,
+        sender: &ComponentSender<AppModel>,
+    ) {
         while let Some(child) = self.tab_bar.first_child() {
             self.tab_bar.remove(&child);
         }
         for (index, tab) in state.tabs.iter().enumerate() {
-            let label = tab
-                .path
+            let display = archives.display(&tab.path);
+            let label = display
                 .file_name()
                 .and_then(OsStr::to_str)
                 .filter(|name| !name.is_empty())
@@ -1764,7 +1828,11 @@ impl PaneWidgets {
             select.add_css_class("tab-select");
             select.set_hexpand(true);
             let content = gtk::Box::new(gtk::Orientation::Horizontal, 7);
-            let icon = gtk::Image::from_icon_name("commander-folder-symbolic");
+            let icon = gtk::Image::from_icon_name(if archives.is_root(&tab.path) {
+                "commander-archive-symbolic"
+            } else {
+                "commander-folder-symbolic"
+            });
             icon.set_pixel_size(13);
             let tag_color = self.tag_store.borrow().get(&tab.path.to_string()).cloned();
             apply_tab_tag(&pill, &icon, tag_color.as_deref());
@@ -1776,8 +1844,19 @@ impl PaneWidgets {
             content.append(&icon);
             content.append(&tab_label);
             select.set_child(Some(&content));
-            select.set_tooltip_text(Some(&tab.path.to_string()));
+            select.set_tooltip_text(Some(&display.to_string()));
             select.update_property(&[gtk::accessible::Property::Label(label)]);
+            context_menu::install_tab_context_menu(
+                &pill,
+                &self.root,
+                context_menu::TabFolderTarget {
+                    pane: self.pane,
+                    path: tab.path.clone(),
+                },
+                self.keymap.clone(),
+                Rc::clone(&self.custom_tool_store),
+                sender.input_sender().clone(),
+            );
             let drop_destination = tab.path.clone();
             install_file_drop_target(&pill, sender, Rc::clone(&self.file_drag_ui), move |_| {
                 Some(drop_destination.clone())
