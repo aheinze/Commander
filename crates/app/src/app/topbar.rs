@@ -20,8 +20,11 @@ pub(super) struct TopBarWidgets {
     window_controls: gtk::Box,
     pub(super) title: gtk::Label,
     location: gtk::Button,
+    #[cfg(test)]
     pub(super) back: gtk::Button,
+    #[cfg(test)]
     pub(super) forward: gtk::Button,
+    #[cfg(test)]
     pub(super) up: gtk::Button,
     pub(super) new_menu: gtk::MenuButton,
     pub(super) view_menu: gtk::MenuButton,
@@ -477,11 +480,6 @@ impl TopBarWidgets {
                 "commander-folder-symbolic",
                 CommandId::CompareDirectories,
             ),
-            (
-                "Edit archive contents…",
-                "commander-archive-symbolic",
-                CommandId::EditArchive,
-            ),
         ] {
             command_row(
                 &more_items,
@@ -520,8 +518,11 @@ impl TopBarWidgets {
             window_controls,
             title,
             location,
+            #[cfg(test)]
             back: navigation_buttons[0].clone(),
+            #[cfg(test)]
             forward: navigation_buttons[1].clone(),
+            #[cfg(test)]
             up: navigation_buttons[2].clone(),
             new_menu,
             view_menu,
@@ -656,10 +657,6 @@ impl TopBarWidgets {
             .update_property(&[gtk::accessible::Property::Label(&format!(
                 "Edit location: {path}"
             ))]);
-        self.back.set_sensitive(state.active().history_index > 0);
-        self.forward
-            .set_sensitive(state.active().history_index + 1 < state.active().history.len());
-        self.up.set_sensitive(path.parent().is_some());
         for (button, mode) in self.view_buttons.iter().zip([
             PaneViewMode::List,
             PaneViewMode::Grid,
@@ -723,16 +720,32 @@ impl TopBarWidgets {
         } else {
             self.search.add_css_class("has-filter");
         }
-        let has_items =
-            !state.selection.is_empty() || model.focused_item(model.active_pane).is_some();
-        let writable =
-            !model.is_archive_browse_path(state.current_directory()) && !model.history_busy;
+        let context = model.action_context(model.active_pane);
         for control in &self.commands {
             let binding = model.keymap.binding_label(control.command);
-            let tip = if binding.is_empty() {
-                control.label.to_owned()
+            let decision = context.action(control.command);
+            let label = decision.label(control.label);
+            if control.command == CommandId::Trash {
+                // This row uses the shared context-menu icon, title, shortcut layout.
+                if let Some(title) = control
+                    .widget
+                    .first_child()
+                    .and_then(|content| content.first_child())
+                    .and_then(|icon| icon.next_sibling())
+                    .and_downcast::<gtk::Label>()
+                {
+                    title.set_label(label);
+                }
+                control
+                    .widget
+                    .update_property(&[gtk::accessible::Property::Label(label)]);
+            }
+            let tip = if let Some(reason) = decision.reason {
+                format!("{label}: {reason}")
+            } else if binding.is_empty() {
+                label.to_owned()
             } else {
-                format!("{} · {binding}", control.label)
+                format!("{label} · {binding}")
             };
             if control.widget.tooltip_text().as_deref() != Some(&tip) {
                 control.widget.set_tooltip_text(Some(&tip));
@@ -740,23 +753,7 @@ impl TopBarWidgets {
             if let Some(shortcut) = &control.shortcut {
                 shortcut.set_label(&binding);
             }
-            let enabled = match control.command {
-                CommandId::NewDirectory | CommandId::NewFile => writable,
-                CommandId::CreateArchive | CommandId::Trash => writable && has_items,
-                CommandId::Copy | CommandId::Move => has_items && !model.history_busy,
-                CommandId::Undo => {
-                    !model.undo_stack.is_empty()
-                        && !model.history_busy
-                        && model.active_operations == 0
-                }
-                CommandId::Redo => {
-                    !model.redo_stack.is_empty()
-                        && !model.history_busy
-                        && model.active_operations == 0
-                }
-                _ => continue,
-            };
-            control.widget.set_sensitive(enabled);
+            control.widget.set_sensitive(decision.enabled());
         }
         self.spinner.set_visible(state.loading || state.filtering);
         self.spinner.set_spinning(state.loading || state.filtering);

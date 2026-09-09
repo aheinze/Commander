@@ -356,37 +356,160 @@ pub(super) fn show_create_archive_dialog(input: relm4::Sender<AppMsg>) {
     let Some(window) = relm4::main_application().active_window() else {
         return;
     };
-    let dialog = AlertSheet::new(
-        Some("Create Archive"),
-        Some("Create an archive beside the selected items."),
-    );
-    dialog.add_response("cancel", "Cancel");
-    dialog.add_response("create", "Create");
-    dialog.set_close_response("cancel");
-    dialog.set_default_response(Some("create"));
-    dialog.set_response_appearance("create", adw::ResponseAppearance::Suggested);
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    let (dialog, view) = utility_dialog("Create Archive", 460, 0, "create-archive-dialog");
+    let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    content.add_css_class("dialog-body");
+    let description = gtk::Label::new(Some("Create an archive beside the selected items."));
+    description.set_xalign(0.0);
+    content.append(&description);
     let name = gtk::Entry::new();
     name.set_text("Archive");
-    name.set_placeholder_text(Some("Archive name"));
     name.set_activates_default(true);
     let format = gtk::DropDown::from_strings(&["ZIP", "7Z", "TAR", "TAR.GZ"]);
-    content.append(&name);
-    content.append(&format);
-    dialog.set_extra_child(Some(&content));
-    let response_name = name.clone();
-    dialog.connect_response(Some("create"), move |_, _| {
-        let format = match format.selected() {
-            1 => ArchiveFormat::SevenZ,
-            2 => ArchiveFormat::Tar,
-            3 => ArchiveFormat::TarGz,
-            _ => ArchiveFormat::Zip,
-        };
-        let _ = input.send(AppMsg::CreateArchive {
-            name: response_name.text().to_string(),
-            format,
-        });
-    });
+    content.append(&form_row("Name", &name));
+    content.append(&form_row("Format", &format));
+    let protect = gtk::CheckButton::with_label("Protect with a password");
+    content.append(&protect);
+    let password = gtk::PasswordEntry::new();
+    password.set_show_peek_icon(true);
+    password.set_activates_default(true);
+    let confirm = gtk::PasswordEntry::new();
+    confirm.set_show_peek_icon(true);
+    confirm.set_activates_default(true);
+    let password_row = form_row("Password", &password);
+    let confirm_row = form_row("Confirm", &confirm);
+    content.append(&password_row);
+    content.append(&confirm_row);
+    let help = gtk::Label::new(None);
+    help.set_xalign(0.0);
+    help.set_wrap(true);
+    help.add_css_class("dialog-hint");
+    content.append(&help);
+    let validation = gtk::Label::new(None);
+    validation.set_xalign(0.0);
+    validation.set_wrap(true);
+    validation.add_css_class("error");
+    content.append(&validation);
+    root.append(&content);
+    let actions = dialog_actions();
+    let cancel = gtk::Button::with_label("Cancel");
+    cancel.add_css_class("dialog-button");
+    let create = gtk::Button::with_label("Create");
+    create.add_css_class("dialog-button");
+    create.add_css_class("suggested-action");
+    actions.append(&cancel);
+    actions.append(&create);
+    root.append(&actions);
+    view.set_content(Some(&root));
+    dialog.set_default_widget(Some(&create));
+    let update = Rc::new(glib::clone!(
+        #[weak]
+        name,
+        #[weak]
+        format,
+        #[weak]
+        protect,
+        #[weak]
+        password,
+        #[weak]
+        confirm,
+        #[weak]
+        password_row,
+        #[weak]
+        confirm_row,
+        #[weak]
+        help,
+        #[weak]
+        validation,
+        #[weak]
+        create,
+        move || {
+            let supported = format.selected() < 2;
+            protect.set_sensitive(supported);
+            if !supported {
+                protect.set_active(false);
+            }
+            let protected = supported && protect.is_active();
+            password_row.set_visible(protected);
+            confirm_row.set_visible(protected);
+            help.set_label(match format.selected() {
+                0 => "AES-256 protects file contents. ZIP file names remain visible.",
+                1 => "AES-256 protects file contents and hides file names.",
+                _ => "This format does not support passwords. Choose ZIP or 7Z for encryption.",
+            });
+            let mismatch =
+                protected && !confirm.text().is_empty() && password.text() != confirm.text();
+            validation.set_label("Passwords do not match.");
+            validation.set_visible(mismatch);
+            create.set_sensitive(
+                valid_file_name(name.text().trim())
+                    && (!protected
+                        || (!password.text().is_empty() && password.text() == confirm.text())),
+            );
+        }
+    ));
+    update();
+    for entry in [&password, &confirm] {
+        let update = Rc::clone(&update);
+        entry.connect_changed(move |_| update());
+    }
+    let changed = Rc::clone(&update);
+    name.connect_changed(move |_| changed());
+    let changed = Rc::clone(&update);
+    protect.connect_toggled(move |_| changed());
+    format.connect_selected_notify(move |_| update());
+    cancel.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        move |_| {
+            dialog.close();
+        }
+    ));
+    create.connect_clicked(glib::clone!(
+        #[weak]
+        dialog,
+        #[weak]
+        name,
+        #[weak]
+        format,
+        #[weak]
+        protect,
+        #[weak]
+        password,
+        #[weak]
+        confirm,
+        move |_| {
+            let format = match format.selected() {
+                1 => ArchiveFormat::SevenZ,
+                2 => ArchiveFormat::Tar,
+                3 => ArchiveFormat::TarGz,
+                _ => ArchiveFormat::Zip,
+            };
+            let secret = protect
+                .is_active()
+                .then(|| crate::archive::Password::new(password.text().to_string()))
+                .flatten();
+            let _ = input.send(AppMsg::CreateArchive {
+                name: name.text().to_string(),
+                format,
+                password: secret,
+            });
+            password.set_text("");
+            confirm.set_text("");
+            dialog.close();
+        }
+    ));
+    dialog.connect_closed(glib::clone!(
+        #[weak]
+        password,
+        #[weak]
+        confirm,
+        move |_| {
+            password.set_text("");
+            confirm.set_text("");
+        }
+    ));
     dialog.present(Some(&window));
     name.grab_focus();
     name.select_region(0, -1);

@@ -239,7 +239,10 @@ impl AppModel {
         }
         let sources: Vec<_> = plan.paths().map(VPath::from).collect();
         if sources.iter().any(|path| self.is_archive_browse_path(path)) {
-            self.pane_mut(pane).error = Some("Archive browsing is read-only".into());
+            self.pane_mut(pane).error = Some(
+                "Secure delete is not available inside archives. Use Remove from archive instead."
+                    .into(),
+            );
             return;
         }
         let id = JobId::next();

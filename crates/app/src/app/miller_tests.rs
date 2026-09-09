@@ -534,6 +534,7 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
     app.emit(AppMsg::CreateArchive {
         name: "column-backup".to_owned(),
         format: ArchiveFormat::TarGz,
+        password: None,
     });
     wait_until(|| {
         app.model()

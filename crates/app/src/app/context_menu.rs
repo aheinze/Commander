@@ -60,7 +60,10 @@ pub(super) fn install_file_context_menu(
         }
         let popover = menu::build_menu(
             &widget,
-            pane,
+            menu::Context {
+                pane,
+                actions: pane_state.borrow().actions,
+            },
             target.as_ref(),
             selected,
             &keymap,

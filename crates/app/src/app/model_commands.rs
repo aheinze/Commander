@@ -174,6 +174,14 @@ impl AppModel {
     }
 
     pub(super) fn on_delete_permanent(&mut self, sender: &ComponentSender<Self>) -> Option<AppMsg> {
+        if self
+            .operation_sources(self.active_pane)
+            .iter()
+            .any(|path| self.is_archive_browse_path(path))
+        {
+            self.review_archive_removal(sender);
+            return None;
+        }
         let count = self.operation_sources(self.active_pane).len();
         if count == 0 {
             self.pane_mut(self.active_pane).error =
@@ -304,32 +312,11 @@ impl AppModel {
             self.palette_query.clear();
             self.palette_selection = 0;
         }
-        let target = self.folder_action_target.as_ref().map_or_else(
-            || self.pane(self.active_pane).current_directory(),
-            |target| &target.path,
-        );
-        if self.is_archive_browse_path(target)
-            && matches!(
-                command,
-                CommandId::Rename
-                    | CommandId::BatchRename
-                    | CommandId::Cut
-                    | CommandId::Move
-                    | CommandId::Trash
-                    | CommandId::DeletePermanent
-                    | CommandId::SecureDelete
-                    | CommandId::Permissions
-                    | CommandId::ConvertImage
-                    | CommandId::PdfTools
-                    | CommandId::NewFile
-                    | CommandId::NewDirectory
-                    | CommandId::Paste
-                    | CommandId::CreateArchive
-                    | CommandId::EditFile
-            )
-        {
-            self.pane_mut(self.active_pane).error =
-                Some("Archive browsing is read-only; use More → Edit archive contents to add, replace or remove entries".to_owned());
+        let decision = self.action_context(self.active_pane).action(command);
+        if let Some(reason) = decision.reason {
+            if decision.notify {
+                self.pane_mut(self.active_pane).error = Some(reason.to_owned());
+            }
             return;
         }
         let message = match command {
@@ -417,7 +404,16 @@ impl AppModel {
             CommandId::SelectGlob => Some(AppMsg::OpenGlob(true)),
             CommandId::DeselectGlob => Some(AppMsg::OpenGlob(false)),
             CommandId::Copy | CommandId::Move | CommandId::Trash => {
-                self.start_operation(command, sender);
+                if command == CommandId::Trash
+                    && self
+                        .operation_sources(self.active_pane)
+                        .iter()
+                        .any(|path| self.is_archive_browse_path(path))
+                {
+                    self.review_archive_removal(sender);
+                } else {
+                    self.start_operation(command, sender);
+                }
                 None
             }
             CommandId::Rename => self.on_rename(sender),
@@ -566,31 +562,6 @@ impl AppModel {
                 } else {
                     self.pane_mut(self.active_pane).error =
                         Some("Select two files, or focus one file in each panel".into());
-                }
-                None
-            }
-            CommandId::EditArchive => {
-                let source = self
-                    .archive_mounts
-                    .source_for(self.pane(self.active_pane).current_directory())
-                    .or_else(|| {
-                        self.focused_item(self.active_pane)
-                            .filter(|(path, kind)| {
-                                *kind == EntryKind::File && is_archive_path(path)
-                            })
-                            .map(|(path, _)| path)
-                    });
-                if let Some(path) = source {
-                    if self.is_archive_browse_path(&path) {
-                        self.pane_mut(self.active_pane).error =
-                            Some("Copy this nested archive out before editing it.".into());
-                    } else {
-                        archive_editor::show(path, sender.input_sender().clone());
-                    }
-                } else {
-                    self.pane_mut(self.active_pane).error = Some(
-                        "Select or browse a ZIP, 7Z, TAR, TAR.GZ or TGZ archive to edit".into(),
-                    );
                 }
                 None
             }

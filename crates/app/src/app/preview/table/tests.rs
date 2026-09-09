@@ -236,7 +236,7 @@ fn workbook(path: &std::path::Path) {
             r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:B2"/><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>City</t></is></c><c r="B1" t="inlineStr"><is><t>Country</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>München</t></is></c><c r="B2" t="inlineStr"><is><t>Germany</t></is></c></row></sheetData></worksheet>"#,
         ),
     ] {
-        zip.start_file(name, zip::write::FileOptions::default())
+        zip.start_file(name, zip::write::SimpleFileOptions::default())
             .unwrap();
         zip.write_all(content.as_bytes()).unwrap();
     }

@@ -104,7 +104,7 @@ fn xlsx(sheet: &str) -> Vec<u8> {
             r#"<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#,
         ),
     ] {
-        zip.start_file(name, zip::write::FileOptions::default())
+        zip.start_file(name, zip::write::SimpleFileOptions::default())
             .unwrap();
         zip.write_all(content.as_bytes()).unwrap();
     }
@@ -240,7 +240,7 @@ fn binary_excel_cells_reach_the_table_preview() {
         ("xl/worksheets/sheet1.bin", sheet.as_slice()),
         ("xl/_rels/workbook.bin.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="worksheets/sheet1.bin" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet"/></Relationships>"#.as_slice()),
     ] {
-        zip.start_file(name, zip::write::FileOptions::default()).unwrap();
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
         zip.write_all(bytes).unwrap();
     }
     let table = preview("book.xlsb", &zip.finish().unwrap().into_inner());

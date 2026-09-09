@@ -162,6 +162,7 @@ impl AppModel {
         &mut self,
         name: String,
         format: ArchiveFormat,
+        password: Option<crate::archive::Password>,
         sender: &ComponentSender<Self>,
     ) {
         let name = name.trim();
@@ -191,6 +192,7 @@ impl AppModel {
                 sources,
                 destination,
                 format: Some(format),
+                password,
             },
             sender,
         );
@@ -211,6 +213,7 @@ impl AppModel {
                 sources: vec![source],
                 destination,
                 format: None,
+                password: None,
             },
             sender,
         );
@@ -406,6 +409,10 @@ impl AppModel {
     }
 
     pub(super) fn run_custom_tool(&mut self, index: usize, sender: &ComponentSender<Self>) {
+        if let Some(reason) = self.action_context(self.active_pane).custom_tool_reason() {
+            self.pane_mut(self.active_pane).error = Some(reason.into());
+            return;
+        }
         let Some(tool) = self
             .custom_tools
             .get(index)

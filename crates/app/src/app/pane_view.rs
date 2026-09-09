@@ -52,14 +52,63 @@ pub(super) fn paths_from_file_list(value: &glib::Value) -> Option<Vec<VPath>> {
 
 pub(super) fn preferred_file_drop_action(
     target: &gtk::DropTarget,
-    internal_drag: bool,
+    state: &FileDragUiState,
+    destination: &VPath,
 ) -> gdk::DragAction {
+    if !(action_policy::Context {
+        history_busy: state.history_busy.get(),
+        ..action_policy::Context::default()
+    })
+    .action(CommandId::Paste)
+    .enabled()
+    {
+        return gdk::DragAction::empty();
+    }
     let offered = target
         .current_drop()
         .map_or(gdk::DragAction::COPY | gdk::DragAction::MOVE, |drop| {
             drop.actions()
         });
-    choose_file_drop_action(offered, target.current_event_state(), internal_drag)
+    let access = state
+        .archive_roots
+        .borrow()
+        .iter()
+        .rev()
+        .find(|(root, _)| destination.as_path().starts_with(root))
+        .map(|(_, writable)| *writable);
+    archive_file_drop_action(
+        offered,
+        target.current_event_state(),
+        state.internal_active.get(),
+        access,
+    )
+}
+
+fn archive_file_drop_action(
+    offered: gdk::DragAction,
+    modifiers: gdk::ModifierType,
+    internal: bool,
+    archive: Option<bool>,
+) -> gdk::DragAction {
+    let destination = action_policy::Location::from_archive(archive);
+    let desired = if destination.is_archive() && !modifiers.contains(gdk::ModifierType::SHIFT_MASK)
+    {
+        gdk::DragAction::COPY
+    } else {
+        choose_file_drop_action(offered, modifiers, internal)
+    };
+    if offered.contains(desired)
+        && action_policy::transfer(
+            action_policy::Location::Folder,
+            destination,
+            desired == gdk::DragAction::MOVE,
+        )
+        .is_ok()
+    {
+        desired
+    } else {
+        gdk::DragAction::empty()
+    }
 }
 
 pub(super) fn choose_file_drop_action(
@@ -96,7 +145,13 @@ pub(super) fn install_file_drag_source(
         let pane_drag = Rc::clone(&pane_drag);
         source.connect_prepare(move |source, _, _| {
             let widget = source.widget()?;
-            file_list_provider(&pane_drag.borrow().drag_paths(&widget))
+            let state = pane_drag.borrow();
+            source.set_actions(if state.archive_access.is_some() {
+                gdk::DragAction::COPY
+            } else {
+                gdk::DragAction::COPY | gdk::DragAction::MOVE
+            });
+            file_list_provider(&state.drag_paths(&widget))
         });
     }
     {
@@ -137,11 +192,11 @@ pub(super) fn install_file_drop_target(
             let Some(widget) = target.widget() else {
                 return gdk::DragAction::empty();
             };
-            if destination(&widget).is_none() {
+            let Some(destination) = destination(&widget) else {
                 return gdk::DragAction::empty();
-            }
+            };
             widget.add_css_class("file-drop-target");
-            preferred_file_drop_action(target, drag_ui.internal_active.get())
+            preferred_file_drop_action(target, &drag_ui, &destination)
         });
     }
     {
@@ -151,10 +206,10 @@ pub(super) fn install_file_drop_target(
             let Some(widget) = target.widget() else {
                 return gdk::DragAction::empty();
             };
-            if destination(&widget).is_none() {
+            let Some(destination) = destination(&widget) else {
                 return gdk::DragAction::empty();
-            }
-            preferred_file_drop_action(target, drag_ui.internal_active.get())
+            };
+            preferred_file_drop_action(target, &drag_ui, &destination)
         });
     }
     target.connect_leave(|target| {
@@ -175,7 +230,7 @@ pub(super) fn install_file_drop_target(
             let Some(sources) = paths_from_file_list(value) else {
                 return false;
             };
-            let action = match preferred_file_drop_action(target, drag_ui.internal_active.get()) {
+            let action = match preferred_file_drop_action(target, &drag_ui, &destination) {
                 action if action.contains(gdk::DragAction::MOVE) => FileDropAction::Move,
                 action if action.contains(gdk::DragAction::COPY) => FileDropAction::Copy,
                 _ => return false,
@@ -914,6 +969,13 @@ impl PaneWidgets {
             self.restoring_scroll.set(true);
         }
         *self.scroll_path.borrow_mut() = Some(state.active().path.clone());
+        *self.file_drag_ui.archive_roots.borrow_mut() = archives.drop_roots();
+        self.pane_drag.borrow_mut().archive_access =
+            archives.contains(state.current_directory()).then(|| {
+                archives
+                    .read_only_reason(state.current_directory())
+                    .is_none()
+            });
         let drag_state_changed = self.rendered_revision != state.revision
             || self.rendered_selection_revision != state.selection_revision
             || self.rendered_miller_revision != state.miller_revision
@@ -1137,12 +1199,24 @@ impl PaneWidgets {
             "Loading…".to_owned()
         };
         if archives.contains(state.current_directory()) && opening_archive.is_none() {
-            status.push_str(" · Archive · read-only");
+            status.push_str(
+                if archives
+                    .read_only_reason(state.current_directory())
+                    .is_some()
+                {
+                    " · Archive · read-only"
+                } else {
+                    " · Archive"
+                },
+            );
         }
         if self.rendered_status != status {
             self.rendered_status.clone_from(&status);
             self.status.set_label(&status);
-            self.status.set_tooltip_text(Some(&status));
+            let tooltip = archives
+                .read_only_reason(state.current_directory())
+                .map_or_else(|| status.clone(), |reason| format!("{status}\n{reason}"));
+            self.status.set_tooltip_text(Some(&tooltip));
         }
         self.git.render(state.git.info.as_ref());
         if self.rendered_view_mode != Some(state.view_mode) {
@@ -1856,6 +1930,19 @@ impl PaneWidgets {
                 self.keymap.clone(),
                 Rc::clone(&self.custom_tool_store),
                 sender.input_sender().clone(),
+                {
+                    let pane_state = self.pane_drag.clone();
+                    let location = action_policy::Location::from_archive(
+                        archives
+                            .contains(&tab.path)
+                            .then(|| archives.read_only_reason(&tab.path).is_none()),
+                    );
+                    move || action_policy::Context {
+                        location,
+                        items: 1,
+                        ..pane_state.borrow().actions
+                    }
+                },
             );
             let drop_destination = tab.path.clone();
             install_file_drop_target(&pill, sender, Rc::clone(&self.file_drag_ui), move |_| {
@@ -2626,6 +2713,32 @@ mod tests {
         assert_eq!(
             choose_file_drop_action(gdk::DragAction::COPY, gdk::ModifierType::SHIFT_MASK, true,),
             gdk::DragAction::COPY
+        );
+    }
+}
+
+#[cfg(test)]
+mod archive_drop_tests {
+    use super::*;
+
+    #[test]
+    fn archive_drops_advertise_copy_and_reject_read_only_or_explicit_moves() {
+        let actions = gdk::DragAction::COPY | gdk::DragAction::MOVE;
+        assert_eq!(
+            archive_file_drop_action(actions, gdk::ModifierType::empty(), true, Some(true)),
+            gdk::DragAction::COPY
+        );
+        assert_eq!(
+            archive_file_drop_action(actions, gdk::ModifierType::SHIFT_MASK, true, Some(true)),
+            gdk::DragAction::empty()
+        );
+        assert_eq!(
+            archive_file_drop_action(actions, gdk::ModifierType::empty(), true, Some(false)),
+            gdk::DragAction::empty()
+        );
+        assert_eq!(
+            archive_file_drop_action(actions, gdk::ModifierType::empty(), true, None),
+            gdk::DragAction::MOVE
         );
     }
 }

@@ -30,7 +30,9 @@ An empty test selection fails. `results.json` records each exit status and durat
 CI uploads these artifacts even when a regression fails.
 
 The native suite checks selection/reveal in all three views, Favorites labels,
-activity controls, archive round trips, archive folder browsing (nested archives,
+activity controls, archive round trips, archive panel edits (copy/paste/drop, folder trees, rename, removal, conflicts,
+recovery copies, undo/redo across restarts, recovery restoration, shared action
+availability, and tab refresh), archive folder browsing (nested archives,
 tabs, session restore, copy out, cancellation, and read-only inspector state),
 secure-delete review and cancellation, captured selections, stale-file rejection,
 and overwrite verification with disposable fixtures,
@@ -198,3 +200,8 @@ disposable servers, including rejected credentials and a connection lost during
 transfer. Keep remote integration and clean installation
 results attached to the release being approved. These checks are not replaced by
 the self-contained native suite.
+
+Archive password interoperability uses an independent 7-Zip reader/writer. With
+`7z` installed, run `cargo test -p dualpane-app --locked encrypted_archives_interoperate_with_7zip -- --ignored`.
+The native archive tests cover password confirmation, wrong-password retry,
+cancellation, creation, extraction, and encrypted edits followed by undo.

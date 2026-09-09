@@ -48,6 +48,7 @@ fn archives_show_activity_counts_paths_and_terminal_states() {
         sources: vec![VPath::from("/source/report.pdf")],
         destination: VPath::from("/destination/backup.zip"),
         format: Some(ArchiveFormat::Zip),
+        password: None,
     };
     let view = JobPresentation::new(&operation);
     assert_eq!(view.title, "Creating archive");
@@ -330,6 +331,7 @@ fn gtk_activity_controls_and_rows_survive_progress_updates() {
         sources: vec![VPath::from("/source/report.pdf")],
         destination: VPath::from("/destination/backup.zip"),
         format: Some(ArchiveFormat::Zip),
+        password: None,
     };
     operations.insert(id, archive);
     widgets.render(&operations, &input);

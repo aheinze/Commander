@@ -984,8 +984,14 @@ impl PreviewWidgets {
             .path
             .file_name()
             .is_some_and(|name| name.as_encoded_bytes().starts_with(b"."));
-        let read_only = model.is_archive_browse_path(&preview.path)
-            || preview.metadata.mode.is_some_and(|mode| mode & 0o222 == 0);
+        let read_only = if model.is_archive_browse_path(&preview.path) {
+            model
+                .archive_mounts
+                .read_only_reason(&preview.path)
+                .is_some()
+        } else {
+            preview.metadata.mode.is_some_and(|mode| mode & 0o222 == 0)
+        };
         self.hidden_value
             .set_label(if hidden { "Yes" } else { "No" });
         self.read_only_value

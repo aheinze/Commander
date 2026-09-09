@@ -94,6 +94,7 @@ impl JobPresentation {
             OperationKind::Files(JobKind::DeletePermanent) => "Deleting",
             OperationKind::CreateArchive => "Creating archive",
             OperationKind::ExtractArchive => "Extracting archive",
+            OperationKind::UpdateArchive => "Updating archive",
             OperationKind::SecureDelete => "Overwriting files",
         };
         let title = if status == "In progress" {
@@ -139,6 +140,9 @@ impl JobPresentation {
             .map(ToString::to_string)
             .unwrap_or_else(|| {
                 let sources = match &operation.retry {
+                    OperationRetry::UpdateArchive { request, .. } => {
+                        return request.mount.source.to_string();
+                    }
                     OperationRetry::Copy { sources, .. }
                     | OperationRetry::Move { sources, .. }
                     | OperationRetry::Trash { sources, .. }
@@ -170,7 +174,9 @@ impl JobPresentation {
             can_retry: matches!(operation.state, JobState::Cancelled | JobState::Failed)
                 && !matches!(
                     operation.kind,
-                    OperationKind::ExtractArchive | OperationKind::SecureDelete
+                    OperationKind::ExtractArchive
+                        | OperationKind::SecureDelete
+                        | OperationKind::UpdateArchive
                 ),
             finished: !active,
         }

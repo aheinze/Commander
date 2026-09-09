@@ -32,6 +32,7 @@ pub(in crate::app) fn install_tab_context_menu(
     keymap: Keymap,
     tools: Rc<RefCell<Vec<CustomToolSession>>>,
     input: relm4::Sender<AppMsg>,
+    actions: impl Fn() -> action_policy::Context + 'static,
 ) {
     let weak_pill = pill.downgrade();
     let weak_parent = parent.downgrade();
@@ -56,7 +57,10 @@ pub(in crate::app) fn install_tab_context_menu(
         let folder = (target.path.clone(), EntryKind::Directory);
         let menu = menu::build_menu(
             parent.upcast_ref(),
-            target.pane,
+            menu::Context {
+                pane: target.pane,
+                actions: actions(),
+            },
             Some(&folder),
             1,
             &keymap,
@@ -123,9 +127,11 @@ impl AppModel {
                 self.quick_look_open = true;
                 self.start_preview(sender);
             }
-            AppMsg::CreateArchive { name, format } => {
-                self.start_create_archive(name, format, sender)
-            }
+            AppMsg::CreateArchive {
+                name,
+                format,
+                password,
+            } => self.start_create_archive(name, format, password, sender),
             AppMsg::DeletePermanentConfirmed => {
                 self.start_operation(CommandId::DeletePermanent, sender)
             }

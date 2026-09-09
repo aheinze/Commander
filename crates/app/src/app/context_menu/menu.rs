@@ -247,11 +247,6 @@ pub(super) fn sections(
     )];
     if selected == 1 && *kind == EntryKind::File && is_archive_path(path) {
         archives.push(action(
-            "Edit archive contents…",
-            "commander-archive-symbolic",
-            CommandId::EditArchive,
-        ));
-        archives.push(action(
             "Extract archive",
             "commander-archive-symbolic",
             CommandId::ExtractArchive,
@@ -295,16 +290,34 @@ fn tool_applies(tool: &CustomToolSession, path: &VPath, kind: EntryKind) -> bool
         })
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(super) struct Context {
+    pub(super) pane: PaneId,
+    pub(super) actions: action_policy::Context,
+}
+
+fn action_sections(
+    mut groups: Vec<(bool, Vec<Action>)>,
+    context: action_policy::Context,
+) -> Vec<(bool, Vec<Action>)> {
+    for (_, actions) in &mut groups {
+        actions.retain(|action| context.action(action.command).visible);
+        for action in actions {
+            action.label = context.action(action.command).label(action.label);
+        }
+    }
+    groups
+}
+
 pub(super) fn build_menu(
     parent: &gtk::Widget,
-    pane: PaneId,
+    context: Context,
     target: Option<&(VPath, EntryKind)>,
     selected: usize,
     keymap: &Keymap,
     tools: &[CustomToolSession],
     input: &relm4::Sender<AppMsg>,
 ) -> gtk::Popover {
+    let pane = context.pane;
     let popover = gtk::Popover::new();
     popover.add_css_class("file-context-menu");
     popover.set_autohide(true);
@@ -359,13 +372,20 @@ pub(super) fn build_menu(
     let mut secondary = Vec::new();
     let clipboard = parent.clipboard();
     let mut paste_buttons = Vec::new();
-    for (more, section) in sections(target, selected) {
+    let sections = sections(target, selected);
+    let policy = action_policy::Context {
+        items: selected,
+        ..context.actions
+    };
+    let sections = action_sections(sections, policy);
+    for (more, section) in sections {
         if section.is_empty() {
             continue;
         }
         let rows = section
             .into_iter()
             .map(|spec| {
+                let decision = policy.action(spec.command);
                 let bindings = keymap.binding_label(spec.command);
                 let shortcut = bindings.split(" / ").next().unwrap_or_default();
                 let row = if spec.command == CommandId::Paste
@@ -394,13 +414,17 @@ pub(super) fn build_menu(
                         spec.command,
                         matches!(
                             spec.command,
-                            CommandId::DeletePermanent | CommandId::SecureDelete
+                            CommandId::DeletePermanent | CommandId::SecureDelete | CommandId::Trash
                         ),
                         input,
                         &popover,
                     )
                 };
-                if spec.command == CommandId::Paste {
+                row.0.set_sensitive(decision.enabled());
+                if let Some(reason) = decision.reason {
+                    row.0.set_tooltip_text(Some(reason));
+                }
+                if spec.command == CommandId::Paste && decision.enabled() {
                     paste_buttons.push(row.0.clone());
                 }
                 if !bindings.is_empty() {
@@ -413,7 +437,9 @@ pub(super) fn build_menu(
         append_context_menu_group(&actions, &mut groups, rows);
         secondary.push(more);
     }
-    if let Some((path, kind)) = target {
+    if policy.custom_tool_reason().is_none()
+        && let Some((path, kind)) = target
+    {
         let rows: Vec<_> = tools
             .iter()
             .enumerate()
@@ -767,5 +793,72 @@ impl MenuContent {
             _ => return glib::Propagation::Proceed,
         }
         glib::Propagation::Stop
+    }
+}
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+
+    #[test]
+    fn archive_menus_offer_supported_actions_and_clear_removal_labels() {
+        let file = (VPath::from("/archive/example.txt"), EntryKind::File);
+        for writable in [true, false] {
+            for target in [Some(&file), None] {
+                let actions: Vec<_> = action_sections(
+                    sections(target, 1),
+                    action_policy::Context {
+                        items: 1,
+                        location: action_policy::Location::from_archive(Some(writable)),
+                        ..action_policy::Context::default()
+                    },
+                )
+                .into_iter()
+                .flat_map(|(_, actions)| actions)
+                .collect();
+                assert!(actions.iter().all(|action| !matches!(
+                    action.command,
+                    CommandId::Cut
+                        | CommandId::Move
+                        | CommandId::SecureDelete
+                        | CommandId::EditFile
+                        | CommandId::DeletePermanent
+                        | CommandId::OpenWith
+                )));
+                if target.is_some() {
+                    assert!(
+                        actions
+                            .iter()
+                            .any(|action| action.command == CommandId::CopyClipboard)
+                    );
+                    assert_eq!(
+                        actions
+                            .iter()
+                            .any(|action| action.command == CommandId::Rename),
+                        writable
+                    );
+                    assert_eq!(
+                        actions
+                            .iter()
+                            .any(|action| action.command == CommandId::Trash
+                                && action.label == "Remove from archive…"),
+                        writable
+                    );
+                } else {
+                    assert_eq!(
+                        actions
+                            .iter()
+                            .any(|action| action.command == CommandId::Paste),
+                        writable
+                    );
+                    assert_eq!(
+                        actions
+                            .iter()
+                            .any(|action| action.command == CommandId::NewDirectory),
+                        writable
+                    );
+                }
+            }
+        }
     }
 }

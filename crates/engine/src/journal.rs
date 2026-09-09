@@ -20,6 +20,15 @@ pub struct BackupRecord {
     pub metadata: Metadata,
 }
 
+/// A byte-verified archive replacement and the durable original needed to reverse it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ArchiveChange {
+    pub source: VPath,
+    pub backup: VPath,
+    pub before: String,
+    pub after: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MutationIntent {
     pub sequence: u64,
@@ -31,6 +40,9 @@ pub struct MutationIntent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "event")]
 pub enum JournalEvent {
+    ArchivePrepared {
+        change: ArchiveChange,
+    },
     Started {
         version: u32,
         kind: JobKind,
@@ -75,6 +87,18 @@ struct Writer {
 pub struct JobJournal {
     path: PathBuf,
     writer: Mutex<Writer>,
+}
+
+impl Drop for JobJournal {
+    fn drop(&mut self) {
+        // Closing our descriptor alone can leave the lock held by a child
+        // between fork and exec. Release it when the last journal owner exits.
+        let writer = self
+            .writer
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner());
+        let _ = writer.file.unlock();
+    }
 }
 
 impl JobJournal {
@@ -275,6 +299,7 @@ pub struct RecoveryRecord {
     pub errors: Vec<String>,
     pub reviewed: bool,
     pub incomplete_tail: bool,
+    pub archive: Option<ArchiveChange>,
 }
 
 pub fn read_journal(path: &Path) -> std::io::Result<RecoveryRecord> {
@@ -330,6 +355,7 @@ pub fn read_journal(path: &Path) -> std::io::Result<RecoveryRecord> {
                 errors: Vec::new(),
                 reviewed: false,
                 incomplete_tail: false,
+                archive: None,
             });
             continue;
         }
@@ -340,6 +366,7 @@ pub fn read_journal(path: &Path) -> std::io::Result<RecoveryRecord> {
             ));
         };
         match event {
+            JournalEvent::ArchivePrepared { change } => record.archive = Some(change),
             JournalEvent::Intent { intent } => {
                 pending.insert(intent.sequence, intent);
             }
@@ -447,6 +474,31 @@ pub fn mark_reviewed(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn finished_journal_releases_lock_while_duplicated_descriptor_exists() {
+        let directory = tempfile::tempdir().unwrap();
+        let journal =
+            JobJournal::create(directory.path(), JobKind::Copy, Vec::new(), None).unwrap();
+        journal
+            .append(&JournalEvent::Finished {
+                state: JobState::Done,
+                errors: Vec::new(),
+                completed_items: 0,
+            })
+            .unwrap();
+        let path = journal.path().to_owned();
+        // A concurrent fork briefly inherits the same open file description
+        // before exec closes CLOEXEC descriptors. A clone models that lifetime.
+        let inherited = journal.writer.lock().unwrap().file.try_clone().unwrap();
+        assert_eq!(
+            read_journal(&path).unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+        drop(journal);
+        assert_eq!(read_journal(&path).unwrap().state, Some(JobState::Done));
+        drop(inherited);
+    }
+
     #[test]
     fn active_journals_are_excluded_and_truncated_tails_keep_the_intent() {
         let directory = tempfile::tempdir().unwrap();

@@ -115,7 +115,7 @@ fn snapshot(window: &adw::ApplicationWindow, name: &str) {
 
 #[test]
 #[ignore = "requires an isolated GTK session; run in the native suite"]
-fn gtk_power_tools_preview_duplicates_compare_and_archive_save() {
+fn gtk_power_tools_preview_duplicates_and_compare() {
     assert_eq!(std::env::var("COMMANDER_ISOLATED_TEST").as_deref(), Ok("1"));
     adw::init().unwrap();
     relm4::main_adw_application()
@@ -222,69 +222,5 @@ fn gtk_power_tools_preview_duplicates_compare_and_archive_save() {
     dialog.close();
     wait(|| app.widget().visible_dialog().is_none());
 
-    let archive = VPath::from(fixture.path().join("sample.zip"));
-    create_archive(
-        &LocalFs,
-        &[
-            VPath::from(left.join("a.txt")),
-            VPath::from(left.join("b.txt")),
-        ],
-        &archive,
-        ArchiveFormat::Zip,
-        &mut ArchiveTask::new(&CancelToken::new()),
-    )
-    .unwrap();
-    app.emit(AppMsg::Navigate(PaneId::Left, archive.clone()));
-    wait(|| {
-        app.model()
-            .is_archive_browse_path(app.model().pane(PaneId::Left).current_directory())
-            && !app.model().pane(PaneId::Left).loading
-    });
-    app.emit(AppMsg::ExecuteCommand(CommandId::NewTab));
-    wait(|| {
-        app.model().pane(PaneId::Left).tabs.len() == 2 && !app.model().pane(PaneId::Left).loading
-    });
-    app.emit(AppMsg::ExecuteCommand(CommandId::EditArchive));
-    wait(|| app.widget().visible_dialog().is_some());
-    let dialog = app.widget().visible_dialog().unwrap();
-    wait(|| button(&dialog, "Add or replace").is_sensitive());
-    entry(&dialog, "Choose a file").set_text(&right.join("a.txt").to_string_lossy());
-    entry(&dialog, "Path inside archive").set_text("a.txt");
-    button(&dialog, "Add or replace").emit_clicked();
-    let selection = table(&dialog)
-        .model()
-        .unwrap()
-        .downcast::<gtk::SingleSelection>()
-        .unwrap();
-    selection.set_selected(1);
-    button(&dialog, "Remove selected").emit_clicked();
-    assert!(button(&dialog, "Save archive").is_sensitive());
-    snapshot(app.widget(), "archive-staged-changes");
-    button(&dialog, "Save archive").emit_clicked();
-    wait(|| text(&dialog, "Archive saved. Recovery copy:"));
-    wait(|| {
-        !app.model().pane(PaneId::Left).loading
-            && !app
-                .model()
-                .pane(PaneId::Left)
-                .current_directory()
-                .as_path()
-                .join("b.txt")
-                .exists()
-    });
-    let reopened = app.model().pane(PaneId::Left).current_directory().clone();
-    assert_eq!(
-        std::fs::read(reopened.as_path().join("a.txt")).unwrap(),
-        b"first\nnew line\nlast\n"
-    );
-    for tab in &app.model().pane(PaneId::Left).tabs {
-        assert_eq!(
-            std::fs::read(tab.path.as_path().join("a.txt")).unwrap(),
-            b"first\nnew line\nlast\n"
-        );
-        assert!(!tab.path.as_path().join("b.txt").exists());
-    }
-    dialog.close();
-    wait(|| app.widget().visible_dialog().is_none());
     app.widget().close();
 }

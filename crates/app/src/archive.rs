@@ -12,11 +12,13 @@ use sevenz_rust2::{
     Password as SevenZPassword,
 };
 use tar::{Archive as TarArchive, Builder as TarBuilder, Header as TarHeader};
-use zip::write::FileOptions;
+type FileOptions<'a> = zip::write::FileOptions<'a, ()>;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 pub mod edit;
+mod password;
 mod progress;
+pub use password::Password;
 pub use progress::{ArchiveProgress, ArchiveTask};
 
 const BUFFER_SIZE: usize = 128 * 1_024;
@@ -47,6 +49,9 @@ pub fn create_archive(
     format: ArchiveFormat,
     task: &mut ArchiveTask<'_>,
 ) -> Result<usize, String> {
+    if task.password.is_some() && !matches!(format, ArchiveFormat::Zip | ArchiveFormat::SevenZ) {
+        return Err("Password protection is available for ZIP and 7Z archives".into());
+    }
     task.check()
         .map_err(|_| "Archive operation cancelled".to_owned())?;
     match vfs.stat(destination, false) {
@@ -143,6 +148,7 @@ fn create_sevenz(
     task: &mut ArchiveTask<'_>,
 ) -> Result<usize, String> {
     let mut archive = SevenZWriter::new(writer).map_err(|error| error.to_string())?;
+    password::configure_sevenz(&mut archive, task.password.as_ref());
     let mut count = 0_usize;
     for source in sources {
         let Some(name) = source.file_name() else {
@@ -215,7 +221,8 @@ fn create_zip(
     task: &mut ArchiveTask<'_>,
 ) -> Result<usize, String> {
     let mut archive = ZipWriter::new(writer);
-    let options = FileOptions::default().compression_method(CompressionMethod::Deflated);
+    let password = task.password.clone();
+    let options = password::zip_options(password.as_ref());
     let mut count = 0_usize;
     for source in sources {
         let Some(name) = source.file_name() else {
@@ -244,7 +251,7 @@ fn add_zip_path<W: Write + io::Seek>(
     archive: &mut ZipWriter<W>,
     source: &VPath,
     archive_path: PathBuf,
-    options: FileOptions,
+    options: FileOptions<'_>,
     task: &mut ArchiveTask<'_>,
 ) -> Result<usize, String> {
     task.check().map_err(|_| "Archive cancelled".to_owned())?;
@@ -377,6 +384,7 @@ pub fn extract_archive(
     destination: &VPath,
     task: &mut ArchiveTask<'_>,
 ) -> Result<usize, String> {
+    password::unlock(vfs, source, task)?;
     let name = source
         .file_name()
         .and_then(OsStr::to_str)
@@ -404,8 +412,8 @@ fn extract_sevenz(
     task: &mut ArchiveTask<'_>,
 ) -> Result<usize, String> {
     let reader = vfs.open_read(source).map_err(|error| error.to_string())?;
-    let mut archive =
-        SevenZReader::new(reader, SevenZPassword::empty()).map_err(|error| error.to_string())?;
+    let mut archive = SevenZReader::new(reader, password::sevenz_password(task.password.as_ref()))
+        .map_err(|error| error.to_string())?;
     let mut count = 0_usize;
     archive
         .for_each_entries(|entry, reader| {
@@ -456,7 +464,12 @@ fn extract_zip(
     for index in 0..archive.len() {
         task.check()
             .map_err(|_| "Extraction cancelled".to_owned())?;
-        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        let mut entry = if let Some(password) = &task.password {
+            archive.by_index_decrypt(index, password.expose().as_bytes())
+        } else {
+            archive.by_index(index)
+        }
+        .map_err(|error| error.to_string())?;
         let Some(relative) = entry.enclosed_name() else {
             return Err(format!("Archive entry {} has an unsafe path", entry.name()));
         };

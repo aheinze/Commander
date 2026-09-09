@@ -686,6 +686,10 @@ impl SimpleComponent for AppModel {
                     notifications::error(&self.recovery_errors.join("\n"));
                 }
             }
+            AppMsg::RestoreArchive(path) => self.restore_archive(path, &sender),
+            AppMsg::ArchiveRestoreReady { source, result } => {
+                self.on_archive_restore_ready(source, result, &sender)
+            }
             AppMsg::RestoreMissingOriginals(path) => self.restore_missing_originals(path, &sender),
             AppMsg::ReviewRecovery(path) => self.review_recovery(path, &sender),
             AppMsg::RecoveryFinished(result) => {
@@ -847,15 +851,23 @@ impl SimpleComponent for AppModel {
             AppMsg::ElevatedPermissionsReady(result) => {
                 self.on_elevated_permissions_ready(result, &sender)
             }
-            AppMsg::CreateArchive { name, format } => {
-                self.start_create_archive(name, format, &sender);
+            AppMsg::CreateArchive {
+                name,
+                format,
+                password,
+            } => {
+                self.start_create_archive(name, format, password, &sender);
             }
+            AppMsg::ArchivePasswordRequested(request) => self.on_archive_password_request(request),
             AppMsg::ArchiveProgress { id, progress } => self.on_archive_progress(id, progress),
             AppMsg::ArchiveReady { id, pane, result } => {
                 self.on_archive_ready(id, pane, result, &sender)
             }
             AppMsg::ArchiveBrowseReady { pane, id, result } => {
                 self.on_archive_browse_ready(pane, id, result, &sender)
+            }
+            AppMsg::ArchiveReloadReady { source, id, result } => {
+                self.on_archive_reload_ready(source, id, result, &sender)
             }
             AppMsg::ConvertImage(format) => self.start_image_conversion(format, &sender),
             AppMsg::ImageConverted(result) => self.on_image_converted(result, &sender),
@@ -905,7 +917,15 @@ impl SimpleComponent for AppModel {
                 destination,
                 result,
             } => self.on_rename_finished(pane, source, destination, result, &sender),
-            AppMsg::ArchiveEdited(source) => self.on_archive_edited(source, &sender),
+            AppMsg::UpdateArchive { pane, request } => {
+                self.start_archive_update(pane, request, &sender)
+            }
+            AppMsg::ArchiveUpdateReady {
+                id,
+                pane,
+                source,
+                result,
+            } => self.on_archive_update_ready(id, pane, source, result, &sender),
             AppMsg::BatchRename(items) => self.start_batch_rename(items, &sender),
             AppMsg::BatchRenameFinished(result) => self.on_batch_rename_finished(result, &sender),
             AppMsg::DeletePermanentConfirmed => {
@@ -1024,7 +1044,15 @@ impl SimpleComponent for AppModel {
                     self.navigate_exact(pane, parent, &sender);
                 }
             }
-            AppMsg::Refresh(pane) => self.start_listing(pane, &sender),
+            AppMsg::Refresh(pane) => {
+                let path = self.pane(pane).current_directory();
+                if self.archive_mounts.contains(path) {
+                    let target = self.archive_mounts.display(path);
+                    self.start_archive_location(pane, target, true, &sender);
+                } else {
+                    self.start_listing(pane, &sender);
+                }
+            }
             AppMsg::OpenRow(pane, row) => self.open_row(pane, row, &sender),
             AppMsg::MillerOpen(pane, column, row) => {
                 self.open_miller_row(pane, column, row, &sender);
@@ -1418,6 +1446,7 @@ impl SimpleComponent for AppModel {
         } else {
             gtk::Orientation::Horizontal
         };
+        widgets.file_drag_ui.history_busy.set(self.history_busy);
         widgets.topbar.render(self);
         if widgets.paned.orientation() != orientation {
             widgets.paned.set_orientation(orientation);
@@ -1582,6 +1611,9 @@ impl SimpleComponent for AppModel {
                     .borrow_mut()
                     .complete(&event.path, event.thumbnail.as_ref());
             }
+        }
+        for pane in [PaneId::Left, PaneId::Right] {
+            widgets.panes[pane.index()].pane_drag.borrow_mut().actions = self.action_context(pane);
         }
         widgets.panes[0].render(
             &self.panes[0],

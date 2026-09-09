@@ -18,13 +18,27 @@ fn state_label(state: JobState) -> &'static str {
     }
 }
 
+fn record_label(record: &RecoveryRecord) -> &'static str {
+    if record.archive.is_some()
+        || record
+            .pending
+            .iter()
+            .chain(record.applied.iter())
+            .any(|step| step.action == "update archive")
+    {
+        "Update archive"
+    } else {
+        job_kind_label(record.kind)
+    }
+}
+
 fn report(record: &RecoveryRecord) -> String {
     let status = record.state.map_or_else(
         || "Interrupted — completion was not recorded".to_owned(),
         |state| state_label(state).to_owned(),
     );
     let mut lines = vec![
-        format!("{} · {status}", job_kind_label(record.kind)),
+        format!("{} · {status}", record_label(record)),
         format!("{} committed item(s)", record.completed_items),
     ];
     if let Some(destination) = &record.destination {
@@ -75,6 +89,9 @@ fn report(record: &RecoveryRecord) -> String {
     }
     lines.extend(record.errors.iter().take(12).cloned());
     lines.push(format!("Full operation record: {}", record.path.display()));
+    if record.archive.is_some() {
+        lines.push("Restore archive replaces the current archive only if it still matches this saved update. A recovery copy of the current version is kept, and the restore can be undone.".into());
+    }
     lines.push("Restore missing originals only fills absent paths. Existing files and temporary outputs remain available for inspection.".to_owned());
     lines.join("\n")
 }
@@ -123,7 +140,7 @@ impl AppModel {
                 .map_or_else(String::new, ToString::to_string);
             let button = gtk::Button::with_label(&format!(
                 "{} · {state} · {} {}\n{destination}",
-                job_kind_label(record.kind),
+                record_label(record),
                 record.completed_items,
                 if record.completed_items == 1 {
                     "item"
@@ -141,6 +158,10 @@ impl AppModel {
             button.connect_clicked(move |button| {
                 let detail = AlertSheet::new(Some("Operation details"), Some(&report(&record)));
                 detail.add_response("close", "Close");
+                if record.archive.is_some() {
+                    detail.add_response("archive", "Restore archive");
+                    detail.set_response_appearance("archive", adw::ResponseAppearance::Destructive);
+                }
                 if !record.backups.is_empty() {
                     detail.add_response("restore", "Restore missing originals");
                 }
@@ -150,6 +171,9 @@ impl AppModel {
                 let path = record.path.clone();
                 let input = input.clone();
                 detail.connect_response(None, move |_, response| match response {
+                    "archive" => {
+                        let _ = input.send(AppMsg::RestoreArchive(path.clone()));
+                    }
                     "restore" => {
                         let _ = input.send(AppMsg::RestoreMissingOriginals(path.clone()));
                     }
@@ -203,6 +227,76 @@ impl AppModel {
             Ok(worker) => self.aux_workers.push(worker),
             Err(error) => self.pane_mut(self.active_pane).error = Some(error.to_string()),
         }
+    }
+
+    pub(super) fn restore_archive(
+        &mut self,
+        path: std::path::PathBuf,
+        sender: &ComponentSender<Self>,
+    ) {
+        if self.history_busy || self.active_operations > 0 {
+            notifications::error("Wait for file operations to finish before restoring an archive");
+            return;
+        }
+        let Some(change) = self
+            .recovery_records
+            .iter()
+            .find(|record| record.path == path)
+            .and_then(|record| record.archive.as_ref())
+        else {
+            return;
+        };
+        let expected = change.clone();
+        let source = change.source.clone();
+        let input = sender.input_sender().clone();
+        self.history_busy = true;
+        match thread::Builder::new()
+            .name("commander-restore-archive".into())
+            .spawn(move || {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let record = read_journal(&path).map_err(|e| e.to_string())?;
+                    let change = record
+                        .archive
+                        .ok_or("The archive recovery record is no longer available")?;
+                    if change != expected {
+                        return Err(
+                            "The recovery record changed. Reopen Recovery to review it.".into()
+                        );
+                    }
+                    restore_archive_recorded(&change)
+                }))
+                .unwrap_or_else(|_| Err("Archive recovery stopped unexpectedly".into()));
+                let _ = input.send(AppMsg::ArchiveRestoreReady { source, result });
+            }) {
+            Ok(worker) => self.aux_workers.push(worker),
+            Err(error) => {
+                self.history_busy = false;
+                notifications::error(&error.to_string());
+            }
+        }
+    }
+
+    pub(super) fn on_archive_restore_ready(
+        &mut self,
+        source: VPath,
+        result: Result<dualpane_engine::journal::ArchiveChange, String>,
+        sender: &ComponentSender<Self>,
+    ) {
+        self.history_busy = false;
+        match result {
+            Ok(change) => {
+                self.push_operation_log(format!(
+                    "Restored {}. Recovery copy of previous version: {}",
+                    change.source, change.backup
+                ));
+                self.record_history(HistoryEntry::Archive { change });
+                notifications::success(
+                    "Archive restored. Use Undo to return to the previous version.",
+                );
+            }
+            Err(error) => notifications::error(&error),
+        }
+        self.on_archive_edited(source, sender);
     }
 
     pub(super) fn review_recovery(
@@ -285,4 +379,35 @@ pub(super) fn restore_absent_backups(
         return Err(message);
     }
     Ok(message)
+}
+
+/// Undo, redo, and manual recovery use the same verified, journaled transaction.
+pub(super) fn restore_archive_recorded(
+    change: &dualpane_engine::journal::ArchiveChange,
+) -> Result<dualpane_engine::journal::ArchiveChange, String> {
+    let journal = Arc::new(
+        dualpane_engine::journal::JobJournal::create(
+            &journal_directory(),
+            JobKind::Copy,
+            vec![change.source.clone()],
+            Some(change.source.clone()),
+        )
+        .map_err(|e| e.message)?,
+    );
+    let cancel = CancelToken::new();
+    let mut task = ArchiveTask::new(&cancel);
+    task.set_journal(journal.clone());
+    let result = crate::archive::edit::restore(change, &mut task);
+    journal
+        .append(&dualpane_engine::journal::JournalEvent::Finished {
+            state: if result.is_ok() {
+                JobState::Done
+            } else {
+                JobState::Failed
+            },
+            errors: result.as_ref().err().cloned().into_iter().collect(),
+            completed_items: u64::from(result.is_ok()),
+        })
+        .map_err(|e| e.message)?;
+    result
 }

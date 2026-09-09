@@ -9,9 +9,11 @@
 //! with `use super::*` to inherit these imports, and exports back to the parent with
 //! `pub(super)`.
 
+mod action_policy;
 mod alert;
+mod archive_actions;
 mod archive_browser;
-mod archive_editor;
+mod archive_password;
 mod batch_rename_view;
 #[cfg(test)]
 mod breadcrumb_tests;
@@ -193,10 +195,14 @@ pub(crate) enum FileDropAction {
 #[derive(Default)]
 struct FileDragUiState {
     internal_active: Cell<bool>,
+    history_busy: Cell<bool>,
+    archive_roots: RefCell<Vec<(std::path::PathBuf, bool)>>,
 }
 
 struct PaneDragState {
     current_directory: Option<VPath>,
+    archive_access: Option<bool>,
+    actions: action_policy::Context,
     selected: Vec<VPath>,
     bound: HashMap<usize, (VPath, EntryKind)>,
 }
@@ -207,6 +213,8 @@ impl PaneDragState {
     fn new() -> Self {
         Self {
             current_directory: None,
+            archive_access: None,
+            actions: action_policy::Context::default(),
             selected: Vec::new(),
             bound: HashMap::new(),
         }
@@ -294,6 +302,7 @@ enum OperationKind {
     SecureDelete,
     CreateArchive,
     ExtractArchive,
+    UpdateArchive,
 }
 
 impl OperationKind {
@@ -303,16 +312,24 @@ impl OperationKind {
             Self::SecureDelete => "Secure delete",
             Self::CreateArchive => "Create archive",
             Self::ExtractArchive => "Extract archive",
+            Self::UpdateArchive => "Update archive",
         }
     }
 
     fn is_archive(self) -> bool {
-        matches!(self, Self::CreateArchive | Self::ExtractArchive)
+        matches!(
+            self,
+            Self::CreateArchive | Self::ExtractArchive | Self::UpdateArchive
+        )
     }
 }
 
 #[derive(Clone)]
 enum OperationRetry {
+    UpdateArchive {
+        pane: PaneId,
+        request: archive_actions::Request,
+    },
     SecureDelete {
         sources: Vec<VPath>,
     },
@@ -339,6 +356,7 @@ enum OperationRetry {
         sources: Vec<VPath>,
         destination: VPath,
         format: Option<ArchiveFormat>,
+        password: Option<crate::archive::Password>,
     },
 }
 
@@ -361,6 +379,9 @@ enum JobBridgeCommand {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) enum HistoryEntry {
+    Archive {
+        change: dualpane_engine::journal::ArchiveChange,
+    },
     Replaced {
         kind: JobKind,
         records: Vec<TransferRecord>,
@@ -1354,6 +1375,11 @@ pub enum AppMsg {
         show: bool,
     },
     RestoreMissingOriginals(std::path::PathBuf),
+    RestoreArchive(std::path::PathBuf),
+    ArchiveRestoreReady {
+        source: VPath,
+        result: Result<dualpane_engine::journal::ArchiveChange, String>,
+    },
     RecoveryFinished(Result<String, String>),
     ReviewRecovery(std::path::PathBuf),
     ExecuteCommand(CommandId),
@@ -1435,7 +1461,9 @@ pub enum AppMsg {
     CreateArchive {
         name: String,
         format: ArchiveFormat,
+        password: Option<crate::archive::Password>,
     },
+    ArchivePasswordRequested(archive_password::Request),
     ArchiveProgress {
         id: JobId,
         progress: ArchiveProgress,
@@ -1447,6 +1475,11 @@ pub enum AppMsg {
     },
     ArchiveBrowseReady {
         pane: PaneId,
+        id: JobId,
+        result: Result<archive_browser::OpenedArchive, String>,
+    },
+    ArchiveReloadReady {
+        source: VPath,
         id: JobId,
         result: Result<archive_browser::OpenedArchive, String>,
     },
@@ -1494,7 +1527,16 @@ pub enum AppMsg {
         destination: VPath,
         result: Result<(), String>,
     },
-    ArchiveEdited(VPath),
+    UpdateArchive {
+        pane: PaneId,
+        request: archive_actions::Request,
+    },
+    ArchiveUpdateReady {
+        id: JobId,
+        pane: PaneId,
+        source: VPath,
+        result: Result<Option<dualpane_engine::journal::ArchiveChange>, String>,
+    },
     BatchRename(Vec<(VPath, String)>),
     BatchRenameFinished(Result<Vec<(VPath, VPath)>, String>),
     DeletePermanentConfirmed,
@@ -1797,7 +1839,7 @@ pub struct AppWidgets {
     palette_presented: Rc<Cell<bool>>,
     palette_input_active: Rc<Cell<bool>>,
     palette_pending_open: Rc<Cell<bool>>,
-    rendered_palette: Option<(String, KeymapProfile, usize)>,
+    rendered_palette: Option<(String, KeymapProfile, usize, action_policy::Context)>,
     topbar: topbar::TopBarWidgets,
     global_search: gtk::SearchEntry,
     rendered_dual_pane: bool,
@@ -1890,11 +1932,27 @@ impl AppModel {
 
     fn palette_items(&self) -> Vec<PaletteItem> {
         let query = self.palette_query.as_str();
-        let mut items = matching_commands(query)
+        let context = self.action_context(self.active_pane);
+        let mut items = matching_commands("")
             .into_iter()
+            .filter(|definition| {
+                let action = context.action(definition.id);
+                action.visible
+                    && palette_query_matches(
+                        query,
+                        &[
+                            action.label(definition.label),
+                            definition.label,
+                            definition.id.as_str(),
+                        ],
+                    )
+            })
             .map(|definition| PaletteItem {
                 action: PaletteAction::Command(definition.id),
-                label: definition.label.to_owned(),
+                label: context
+                    .action(definition.id)
+                    .label(definition.label)
+                    .to_owned(),
                 binding: self.keymap.binding_label(definition.id),
             })
             .collect::<Vec<_>>();
@@ -1962,12 +2020,14 @@ impl AppModel {
                 .enumerate()
                 .filter_map(|(index, tool)| {
                     let label = format!("Run custom tool · {}", tool.name);
-                    (tool.enabled && palette_query_matches(query, &[&label, "custom tool run"]))
-                        .then(|| PaletteItem {
-                            action: PaletteAction::CustomTool(index),
-                            label,
-                            binding: String::new(),
-                        })
+                    (tool.enabled
+                        && context.custom_tool_reason().is_none()
+                        && palette_query_matches(query, &[&label, "custom tool run"]))
+                    .then(|| PaletteItem {
+                        action: PaletteAction::CustomTool(index),
+                        label,
+                        binding: String::new(),
+                    })
                 }),
         );
         items
@@ -2032,6 +2092,7 @@ impl Drop for AppModel {
             cancel.cancel();
         }
         self.terminal_tabs.clear();
+        self.archive_mounts.cancel_reloads();
         for pane in &mut self.panes {
             pane.archive_browse.cancel();
         }

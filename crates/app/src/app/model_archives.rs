@@ -16,6 +16,7 @@ impl AppModel {
             sources,
             destination,
             format,
+            password,
         } = retry.clone()
         else {
             return;
@@ -30,7 +31,7 @@ impl AppModel {
         }
         if self.is_archive_browse_path(&destination) {
             self.pane_mut(pane).error =
-                Some("Archive browsing is read-only; choose a writable destination".to_owned());
+                Some("Create or extract this archive in a regular folder, then copy the result into the archive.".to_owned());
             return;
         }
         let kind = if format.is_some() {
@@ -61,8 +62,19 @@ impl AppModel {
             .name(format!("commander-archive-{}", id.get()))
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let cancel = control.cancel_token();
                     let mut task = ArchiveTask::with_progress(&control, |progress| {
                         let _ = input.send(AppMsg::ArchiveProgress { id, progress });
+                    });
+                    task.set_password(password);
+                    task.set_password_prompt(|source, incorrect| {
+                        archive_password::request(
+                            &input,
+                            archive_password::Context::Operation(id),
+                            source,
+                            incorrect,
+                            &cancel,
+                        )
                     });
                     let result = if let Some(format) = format {
                         create_archive(vfs.as_ref(), &sources, &destination, format, &mut task)
@@ -121,13 +133,23 @@ impl AppModel {
                 operation.progress.items_done = count as u64;
                 self.push_operation_log(format!("{label} completed for {count} item(s)"));
             }
+            Err(_)
+                if operation.control.cancel_token().is_cancelled()
+                    && operation.progress.items_done == 0
+                    && operation.progress.bytes_done == 0 =>
+            {
+                operation.state = JobState::Cancelled;
+                self.push_operation_log(format!("{label} cancelled"));
+            }
             Err(error) => {
                 operation.state = if operation.control.cancel_token().is_cancelled() {
                     JobState::Cancelled
                 } else {
                     JobState::Failed
                 };
-                let error = if operation.kind == OperationKind::ExtractArchive {
+                let error = if operation.kind == OperationKind::ExtractArchive
+                    && (operation.progress.items_done > 0 || operation.progress.bytes_done > 0)
+                {
                     format!("{error}. Files already extracted remain in the destination.")
                 } else {
                     error

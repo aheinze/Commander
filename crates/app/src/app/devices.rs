@@ -380,6 +380,7 @@ fn under_roots(path: &VPath, roots: &[VPath]) -> bool {
 
 fn operation_uses_roots(retry: &OperationRetry, roots: &[VPath]) -> bool {
     let (sources, destination) = match retry {
+        OperationRetry::UpdateArchive { request, .. } => return request.uses_roots(roots),
         OperationRetry::Copy {
             sources,
             destination,

@@ -31,6 +31,11 @@ pub(super) fn apply_history(
     direction: HistoryDirection,
 ) -> Result<(), String> {
     match (entry, direction) {
+        (HistoryEntry::Archive { change }, _) => {
+            *change = recovery::restore_archive_recorded(change)?;
+            Ok(())
+        }
+
         (
             HistoryEntry::Replaced {
                 kind,

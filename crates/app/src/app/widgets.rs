@@ -654,6 +654,7 @@ impl AppWidgets {
             model.palette_query.clone(),
             model.keymap.profile(),
             model.palette_selection,
+            model.action_context(model.active_pane),
         );
         if self.rendered_palette.as_ref() == Some(&rendered) {
             return;
@@ -699,6 +700,13 @@ impl AppWidgets {
                 button.add_css_class("command-row-selected");
             }
             button.set_child(Some(&row));
+            if let PaletteAction::Command(command) = &item.action {
+                let decision = model.action_context(model.active_pane).action(*command);
+                button.set_sensitive(decision.enabled());
+                if let Some(reason) = decision.reason {
+                    button.set_tooltip_text(Some(reason));
+                }
+            }
             let input = sender.input_sender().clone();
             button.connect_clicked(move |_| {
                 let _ = input.send(AppMsg::ActivatePaletteItem(index));

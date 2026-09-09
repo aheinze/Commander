@@ -187,6 +187,13 @@ offer connect, edit, forget, and copy address; mounted remotes offer disconnect.
 Workspace menus open, update, rename, or remove the saved setup. Removing a
 sidebar shortcut or history entry does not delete the folder it points to.
 
+The toolbar, file and tab menus, command palette, keyboard commands, and file
+drops share action availability rules. Archive actions use the same wording at
+each entry point, including **Remove from archive…**. Unsupported archive commands
+are omitted from context menus and the palette; disabled controls provide an
+explanation in their tooltip. File changes remain unavailable while undo, redo,
+or archive recovery is running.
+
 File context menus put opening, copying, renaming, and Trash first. **More actions**
 contains specialist tools, archives, tags, permanent deletion, and **Secure delete…**. Start typing to
 search every available action, including those under More actions. Arrow keys move
@@ -359,9 +366,19 @@ Breadcrumbs and tabs show archive names and icons, with Parent, Back, and Forwar
 navigation, nested archives, opening in a new tab or the other pane, and restoration
 of saved archive locations. Opening extracts the archive to temporary storage in
 the background; each pane shows a loading state with Escape to cancel. The footer
-and inspector identify the browsing view as read-only. Use **More → File tools →
-Edit archive contents** to add, replace, or remove entries through a reviewed save.
-You can also launch the editor from an archive file’s context menu.
+identifies archive locations and marks read-only archives explicitly. Copy, paste,
+or drag files and folders into writable archives; rename, create folders or empty
+files, and remove entries directly in the panels. See **Editing archives** below.
+
+**Create Archive → Protect with a password** encrypts ZIP file contents with AES-256.
+7Z uses AES-256 for both contents and file names; ZIP names remain visible.
+TAR and TAR.GZ do not support passwords. Enter and confirm the password before
+creating a protected archive. Opening or extracting an encrypted ZIP or 7Z prompts
+for its password, with retry and cancellation. Existing ZipCrypto ZIPs can also be
+opened. Encrypted streams are verified before extraction writes destination files.
+Passwords remain in memory for the session and are never written to settings,
+history, journals, or logs. Browsing uses a private temporary directory containing
+the unlocked files, removed when the application exits normally.
 
 Archive creation and extraction also appear in the activity strip and Jobs list,
 including when the inspector is hidden. A small spinner indicates work when the total
@@ -392,7 +409,9 @@ merges. Original overwritten items are retained beside their destinations under 
 `.commander-undo-…` names. Undo checks identity, size, and modification times and refuses
 outputs with unexpected edits or new children. Copy redo restores the copied data from
 Trash, even if its source changed. Undo/redo history is saved across restarts; emptying
-Trash or removing retained backups can make a history entry unavailable.
+Trash or removing retained backups can make a history entry unavailable. Archive
+updates also participate in this history; archive undo/redo verifies whole-file
+SHA-256 digests and retains both versions instead of using Trash.
 
 **Secure delete…** in the file context menu's **More actions** performs a best-effort
 overwrite of selected regular local files on Linux. It is also in the command palette
@@ -417,7 +436,10 @@ created, the operation fails before changing files. Interrupted jobs are surface
 startup; live jobs owned by another Commander instance are excluded. Recovery shows
 completed destinations, uncertain steps, and retained originals. **Restore missing
 originals** fills only absent paths and refuses changed backups. Existing destinations
-are never overwritten by that recovery action. Retained originals and temporary outputs
+are never overwritten by that recovery action. Archive operation details also offer
+**Restore archive**, which restores the retained version only when the current
+archive still matches that saved operation. It keeps the current version as another
+recovery copy and adds an Undo entry. Retained originals and temporary outputs
 are not automatically deleted. Inspect the listed locations before removing them.
 An interrupted undo/redo is archived for review and its history is not automatically
 replayed. Records live in the application's XDG state directory (`dualpane/jobs` and
@@ -540,25 +562,40 @@ matching prefixes and suffixes without an expensive full line alignment.
 
 ### Editing archives
 
-Select an archive, or enter one, and choose **Edit archive contents**. ZIP, 7Z,
-TAR, TAR.GZ, and TGZ are supported. Choose a regular file and enter its destination
-path within the archive, then **Add or replace**. Select an entry and use
-**Remove selected** to remove it; removing a directory also removes its descendants.
-The table displays all pending changes. **Discard changes** resets the plan.
-Closing the editor before saving leaves the archive unchanged.
+Browse a ZIP, 7Z, TAR, TAR.GZ, or TGZ archive in either pane and use the normal
+file commands. **F5 / Copy**, clipboard paste, and copy drops import files and
+whole folder trees, including empty folders. Existing folders merge; name
+conflicts use the normal Replace, Replace if Newer, Keep Both, and Skip dialog.
+**F2 / Rename**, **F7 / New folder**, and **New file** operate within the current
+archive folder. **Delete** asks to remove selected entries from the archive;
+removing a directory includes its descendants. Copying entries out works as usual.
 
-**Save archive** builds a replacement beside the archive, checks that the
-original has not changed, synchronizes the completed output, and publishes it by
-renaming. Cancellation or a failure before publication keeps the original intact.
-The original bytes are retained in a `.commander-archive-backup-*` recovery file
-beside the archive; the saved result displays its exact path. Keep it until you
-have checked the new archive. Recovery copies can be removed manually afterward.
-Saving refreshes panels currently browsing that archive at its root.
+Each operation saves in the background and appears in Jobs with progress, pause,
+and cancellation. There is no separate archive editor or Save step. The writer
+builds a replacement beside the archive, checks that the original has not changed,
+synchronizes the completed output, and publishes it by renaming. Cancellation or
+a failure before publication keeps the original intact. A
+`.commander-archive-backup-*` recovery file retains the original bytes beside the
+archive; the activity log records its exact path. Keep it until you have checked
+the updated archive, then remove it manually when no longer needed. Archive
+updates are included in the normal Undo/Redo history, including after a restart.
+Undo, redo, and recovery verify both the current archive and the retained copy by
+SHA-256 before publishing a replacement. They refuse archives or backups whose
+contents have changed. Each restore retains the version it replaces.
 
-Unchanged ZIP entries retain their compressed data, permissions, and archive
-comment. TAR headers and links are retained; sparse or extended-metadata TARs are
-rejected instead of silently losing those attributes. Password-protected archives,
-archives with ambiguous duplicate entry paths, and archives above 100,000 entries
-are not editable. To edit a nested archive, copy it out first. This editor adds
-regular files individually; it does not yet import whole directory trees or write
-external-editor changes back automatically.
+Open panels and tabs refresh to the new contents and retain existing folders where
+possible. A removed folder falls back to the archive root. Updating an outer
+archive invalidates nested archive views, which return to that outer archive.
+
+Unchanged unencrypted ZIP entries retain their compressed data, permissions, and
+archive comment. Encrypted ZIP entries are re-encrypted with AES-256 using the same
+password; new files are encrypted too. Edited encrypted 7Z archives retain password
+protection and hide file names. Undo, redo, and recovery restore the encrypted
+archive bytes without storing the password. TAR headers and links are retained;
+sparse or extended-metadata TARs are rejected instead of silently losing those
+attributes. Archives with ambiguous duplicate entry paths and archives above
+100,000 entries are not editable. Nested archives and files without write permission are shown as
+read-only; copy a nested archive out to edit it. Imports accept regular files and
+folders, not symbolic links or special files. Cut/move across archive boundaries,
+batch rename, permissions changes, and automatic external-editor write-back are
+not supported; use Copy and then Remove when moving entries.

@@ -64,10 +64,10 @@ update checks, verified downloads from signed releases, and copyable details for
 troubleshooting.
 
 Preview batch renames before applying them, find duplicate files by content, compare
-files side by side, and review changes inside archives before saving. There is more
-built in: archive browsing, creation and extraction, SHA-256 checksums, image
-conversion, PDF tools, and file tags. Reach network folders
-through GVfs-backed connections such as SFTP, SMB, FTP, and WebDAV, with the
+files side by side, and manage archive contents directly in your file panels. There is more
+built in: archive browsing, creation and extraction, password-protected ZIP and 7z
+archives, SHA-256 checksums, image conversion, PDF tools, and file tags. Reach
+network folders through GVfs-backed connections such as SFTP, SMB, FTP, and WebDAV, with the
 corresponding GVfs backends installed.
 
 ## Get started

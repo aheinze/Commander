@@ -9,11 +9,6 @@ impl AppModel {
                 Some("Wait for undo or redo to finish before changing files".to_owned());
             return;
         }
-        if self.is_archive_browse_path(self.pane(self.active_pane).current_directory()) {
-            self.pane_mut(self.active_pane).error =
-                Some("Archive browsing is read-only; copy items out instead".to_owned());
-            return;
-        }
         let name = name.trim();
         if !valid_file_name(name) {
             self.pane_mut(self.active_pane).error =
@@ -25,6 +20,10 @@ impl AppModel {
             .pane(pane)
             .current_directory()
             .join_name(OsStr::new(name));
+        if self.is_archive_browse_path(&path) {
+            self.archive_create(pane, path, true, sender);
+            return;
+        }
         let vfs = Arc::clone(&self.vfs);
         let input = sender.input_sender().clone();
         let worker = thread::Builder::new()
@@ -50,11 +49,6 @@ impl AppModel {
                 Some("Wait for undo or redo to finish before changing files".to_owned());
             return;
         }
-        if self.is_archive_browse_path(self.pane(self.active_pane).current_directory()) {
-            self.pane_mut(self.active_pane).error =
-                Some("Archive browsing is read-only; copy items out instead".to_owned());
-            return;
-        }
         let name = name.trim();
         if !valid_file_name(name) {
             self.pane_mut(self.active_pane).error =
@@ -66,6 +60,10 @@ impl AppModel {
             .pane(pane)
             .current_directory()
             .join_name(OsStr::new(name));
+        if self.is_archive_browse_path(&path) {
+            self.archive_create(pane, path, false, sender);
+            return;
+        }
         let vfs = Arc::clone(&self.vfs);
         let input = sender.input_sender().clone();
         let worker = thread::Builder::new()
@@ -96,11 +94,6 @@ impl AppModel {
                 Some("Wait for undo or redo to finish before changing files".to_owned());
             return;
         }
-        if self.is_archive_browse_path(&source) {
-            self.pane_mut(self.active_pane).error =
-                Some("Archive browsing is read-only; copy items out instead".to_owned());
-            return;
-        }
         let name = name.trim();
         if !valid_file_name(name) {
             self.pane_mut(self.active_pane).error =
@@ -113,6 +106,10 @@ impl AppModel {
             return;
         };
         let destination = parent.join_name(OsStr::new(name));
+        if self.is_archive_browse_path(&source) {
+            self.archive_rename(pane, source, destination, sender);
+            return;
+        }
         let vfs = Arc::clone(&self.vfs);
         let input = sender.input_sender().clone();
         let worker = thread::Builder::new()

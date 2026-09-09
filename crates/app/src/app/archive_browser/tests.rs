@@ -97,9 +97,24 @@ fn nested_archives_parent_to_the_outer_archive_and_corrupt_or_cancelled_openings
     )
     .unwrap();
     let inner_path = outer_open.location.join_name(OsStr::new("nested.zip"));
-    let inner_open = open_location(&LocalFs, &inner_path, &[], &CancelToken::new()).unwrap();
+    let inner_open = open_location(
+        &LocalFs,
+        &inner_path,
+        &[Arc::clone(&outer_open.mount)],
+        &CancelToken::new(),
+    )
+    .unwrap();
+    assert!(
+        inner_open
+            .mount
+            .editable
+            .as_ref()
+            .unwrap_err()
+            .contains("Nested")
+    );
     let paths = ArchiveLocations {
         mounts: vec![outer_open.mount, inner_open.mount],
+        ..ArchiveLocations::default()
     };
     assert_eq!(
         paths.display(&inner_open.location),
@@ -284,12 +299,8 @@ fn gtk_archive_browser_navigation_copy_out_nested_archives_and_restore() {
         app.widgets().panes[0].path_entry.text(),
         bundle.to_str().unwrap()
     );
-    assert!(
-        app.widgets().panes[0]
-            .status
-            .text()
-            .contains("Archive · read-only")
-    );
+    assert!(app.widgets().panes[0].status.text().contains("Archive"));
+    assert!(!app.widgets().panes[0].status.text().contains("read-only"));
     apply_appearance(AppearanceMode::Dark);
     snapshot(app.widget(), "archive-root-dark");
     app.emit(AppMsg::OpenRow(PaneId::Left, row(&app, "Documents")));
@@ -332,7 +343,7 @@ fn gtk_archive_browser_navigation_copy_out_nested_archives_and_restore() {
     wait_until(|| {
         app.model().preview_state.path.as_ref() == Some(&readme)
             && !app.model().preview_state.loading
-            && app.widgets().preview.read_only_value.text() == "Yes"
+            && app.widgets().preview.read_only_value.text() == "No"
     });
     assert!(
         app.model()
@@ -343,12 +354,12 @@ fn gtk_archive_browser_navigation_copy_out_nested_archives_and_restore() {
             .metadata
             .mode
             .is_some_and(|mode| mode & 0o222 != 0),
-        "archive restrictions must override the writable staging permissions"
+        "editable archives must expose writable entries"
     );
     reveal_inspector_metadata(&app);
     snapshot(app.widget(), "archive-member-inspector-dark");
     app.emit(AppMsg::ExecuteCommand(CommandId::TogglePreview));
-    app.emit(AppMsg::ExecuteCommand(CommandId::Trash));
+    app.emit(AppMsg::ExecuteCommand(CommandId::SecureDelete));
     wait_until(|| app.model().pane(PaneId::Left).error.is_some());
     assert!(readme.as_path().exists());
     app.emit(AppMsg::Refresh(PaneId::Left));
@@ -508,4 +519,723 @@ fn gtk_archive_browser_navigation_copy_out_nested_archives_and_restore() {
     restored.emit(AppMsg::ExecuteCommand(CommandId::BrowseArchive));
     wait_until(|| visible(&restored, PaneId::Left) == VPath::from(bundle.as_path()));
     restored.widget().close();
+}
+
+fn descendants(root: &impl IsA<gtk::Widget>) -> Vec<gtk::Widget> {
+    let mut nodes = vec![root.as_ref().clone()];
+    let mut child = root.as_ref().first_child();
+    while let Some(widget) = child {
+        nodes.extend(descendants(&widget));
+        child = widget.next_sibling();
+    }
+    nodes
+}
+
+fn dialog_button(dialog: &adw::Dialog, label: &str) -> gtk::Button {
+    descendants(dialog)
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .find(|button| button.label().as_deref() == Some(label))
+        .unwrap()
+}
+
+fn submit_name(app: &relm4::Controller<AppModel>, command: CommandId, name: &str, button: &str) {
+    app.emit(AppMsg::ExecuteCommand(command));
+    wait_until(|| app.widget().visible_dialog().is_some());
+    let dialog = app.widget().visible_dialog().unwrap();
+    let nodes = descendants(&dialog);
+    assert!(nodes.iter().any(
+        |widget| widget.has_css_class("window-close") && widget.has_css_class("window-action")
+    ));
+    nodes
+        .into_iter()
+        .find_map(|widget| widget.downcast::<gtk::Entry>().ok())
+        .unwrap()
+        .set_text(name);
+    dialog_button(&dialog, button).emit_clicked();
+    wait_until(|| app.widget().visible_dialog().is_none());
+}
+
+fn root(app: &relm4::Controller<AppModel>, pane: PaneId) -> VPath {
+    app.model().pane(pane).current_directory().clone()
+}
+
+fn updated(app: &relm4::Controller<AppModel>, previous: &VPath) {
+    wait_until(|| {
+        let model = app.model();
+        model.active_operations == 0
+            && model.panes.iter().all(|pane| !pane.loading)
+            && model.pane(PaneId::Left).current_directory() != previous
+            && model.pane(PaneId::Left).current_directory()
+                == model.pane(PaneId::Right).current_directory()
+    });
+    assert!(
+        app.model()
+            .operations
+            .values()
+            .all(|operation| operation.error.is_none())
+    );
+}
+
+#[test]
+#[ignore = "requires an isolated GTK session; run in the native suite"]
+fn gtk_archive_panel_updates_copy_paste_drop_rename_remove_and_refresh_tabs() {
+    assert_eq!(std::env::var("COMMANDER_ISOLATED_TEST").as_deref(), Ok("1"));
+    adw::init().unwrap();
+    relm4::main_adw_application()
+        .register(gio::Cancellable::NONE)
+        .unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let original_file = fixture.path().join("original.txt");
+    std::fs::write(&original_file, "original contents").unwrap();
+    let bundle = fixture.path().join("Working archive.zip");
+    let nested = fixture.path().join("nested.zip");
+    archive(&original_file, &nested, ArchiveFormat::Zip);
+    create_archive(
+        &LocalFs,
+        &[
+            VPath::from(original_file.as_path()),
+            VPath::from(nested.as_path()),
+        ],
+        &VPath::from(bundle.as_path()),
+        ArchiveFormat::Zip,
+        &mut ArchiveTask::new(&CancelToken::new()),
+    )
+    .unwrap();
+    let original = std::fs::read(&bundle).unwrap();
+    let app = launch(
+        VPath::from(bundle.as_path()),
+        VPath::from(bundle.as_path()),
+        Some(SessionState {
+            sidebar_visible: false,
+            preview_visible: false,
+            dual_pane: true,
+            window_width: 1320,
+            window_height: 800,
+            ..SessionState::default()
+        }),
+    );
+    app.widget().present();
+    wait_until(|| {
+        app.model()
+            .panes
+            .iter()
+            .all(|pane| !pane.loading && pane.archive_browse.source.is_none())
+            && visible(&app, PaneId::Left) == VPath::from(bundle.as_path())
+            && root(&app, PaneId::Left) == root(&app, PaneId::Right)
+    });
+    app.emit(AppMsg::NewTab(PaneId::Left));
+    wait_until(|| {
+        app.model().pane(PaneId::Left).tabs.len() == 2 && !app.model().pane(PaneId::Left).loading
+    });
+    app.emit(AppMsg::ContextTarget(PaneId::Left, None));
+    for (view, name) in [
+        (PaneViewMode::List, "List folder"),
+        (PaneViewMode::Grid, "Grid folder"),
+        (PaneViewMode::Columns, "Columns folder"),
+    ] {
+        app.emit(AppMsg::SetViewMode(view));
+        wait_until(|| {
+            app.model().pane(PaneId::Left).view_mode == view
+                && !app.model().pane(PaneId::Left).loading
+        });
+        let previous = root(&app, PaneId::Left);
+        submit_name(&app, CommandId::NewDirectory, name, "Create");
+        updated(&app, &previous);
+        assert!(root(&app, PaneId::Left).as_path().join(name).is_dir());
+        assert!(
+            app.model()
+                .pane(PaneId::Left)
+                .tabs
+                .iter()
+                .all(|tab| tab.path == root(&app, PaneId::Left))
+        );
+    }
+    app.emit(AppMsg::SetViewMode(PaneViewMode::List));
+    wait_until(|| app.model().pane(PaneId::Left).view_mode == PaneViewMode::List);
+    let previous = root(&app, PaneId::Left);
+    submit_name(&app, CommandId::NewFile, "empty.txt", "Create");
+    updated(&app, &previous);
+    assert_eq!(
+        std::fs::metadata(root(&app, PaneId::Left).as_path().join("empty.txt"))
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let incoming = fixture.path().join("Pasted folder");
+    std::fs::create_dir_all(incoming.join("Empty")).unwrap();
+    std::fs::write(incoming.join("note.txt"), "pasted contents").unwrap();
+    let previous = root(&app, PaneId::Left);
+    app.emit(AppMsg::ClipboardFiles {
+        pane: PaneId::Left,
+        destination: previous.clone(),
+        result: Ok((vec![VPath::from(incoming.as_path())], false)),
+        owner: None,
+    });
+    updated(&app, &previous);
+    assert!(
+        root(&app, PaneId::Left)
+            .as_path()
+            .join("Pasted folder/Empty")
+            .is_dir()
+    );
+
+    let previous = root(&app, PaneId::Left);
+    app.emit(AppMsg::ContextTarget(
+        PaneId::Left,
+        Some((
+            previous.join_name(OsStr::new("Pasted folder")),
+            EntryKind::Directory,
+        )),
+    ));
+    submit_name(&app, CommandId::Rename, "Renamed folder", "Rename");
+    updated(&app, &previous);
+    assert_eq!(
+        std::fs::read_to_string(
+            root(&app, PaneId::Left)
+                .as_path()
+                .join("Renamed folder/note.txt")
+        )
+        .unwrap(),
+        "pasted contents"
+    );
+
+    // Dragging a duplicate uses the app's existing conflict sheet.
+    std::fs::write(&original_file, "replacement contents").unwrap();
+    let previous = root(&app, PaneId::Left);
+    app.emit(AppMsg::DropFiles {
+        sources: vec![VPath::from(original_file.as_path())],
+        destination: previous.clone(),
+        action: FileDropAction::Copy,
+    });
+    wait_until(|| app.widget().visible_dialog().is_some());
+    let dialog = app.widget().visible_dialog().unwrap();
+    assert!(
+        descendants(&dialog)
+            .iter()
+            .any(|widget| widget.has_css_class("window-close"))
+    );
+    snapshot(app.widget(), "archive-panel-replace-dark");
+    dialog_button(&dialog, "Replace").emit_clicked();
+    updated(&app, &previous);
+    wait_until(|| app.widget().visible_dialog().is_none());
+    assert_eq!(
+        std::fs::read_to_string(root(&app, PaneId::Left).as_path().join("original.txt")).unwrap(),
+        "replacement contents"
+    );
+
+    // Confirmation captures its target, even if selection changes while it is open.
+    let previous = root(&app, PaneId::Left);
+    app.emit(AppMsg::ContextTarget(
+        PaneId::Left,
+        Some((
+            previous.join_name(OsStr::new("Renamed folder")),
+            EntryKind::Directory,
+        )),
+    ));
+    app.emit(AppMsg::ExecuteCommand(CommandId::Trash));
+    wait_until(|| app.widget().visible_dialog().is_some());
+    let dialog = app.widget().visible_dialog().unwrap();
+    apply_appearance(AppearanceMode::Light);
+    snapshot(app.widget(), "archive-panel-remove-light");
+    app.emit(AppMsg::ContextTarget(
+        PaneId::Left,
+        Some((
+            previous.join_name(OsStr::new("original.txt")),
+            EntryKind::File,
+        )),
+    ));
+    wait_until(|| {
+        app.model()
+            .focused_item(PaneId::Left)
+            .is_some_and(|(path, _)| path.file_name().is_some_and(|name| name == "original.txt"))
+    });
+    dialog_button(&dialog, "Remove").emit_clicked();
+    updated(&app, &previous);
+    assert!(
+        !root(&app, PaneId::Left)
+            .as_path()
+            .join("Renamed folder")
+            .exists()
+    );
+    assert!(
+        root(&app, PaneId::Left)
+            .as_path()
+            .join("original.txt")
+            .exists()
+    );
+    assert!(
+        std::fs::read_dir(fixture.path())
+            .unwrap()
+            .flatten()
+            .any(|entry| entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".commander-archive-backup-")
+                && std::fs::read(entry.path()).unwrap() == original)
+    );
+    wait_until(|| app.widget().visible_dialog().is_none());
+    let previous = root(&app, PaneId::Left);
+    app.emit(AppMsg::NavigateExact(
+        PaneId::Right,
+        VPath::from(bundle.join("nested.zip")),
+    ));
+    wait_until(|| {
+        visible(&app, PaneId::Right) == VPath::from(bundle.join("nested.zip"))
+            && !app.model().pane(PaneId::Right).loading
+            && app
+                .model()
+                .pane(PaneId::Right)
+                .archive_browse
+                .source
+                .is_none()
+    });
+    assert!(app.widgets().panes[1].status.text().contains("read-only"));
+    let old_nested = root(&app, PaneId::Right);
+    app.emit(AppMsg::ContextTarget(PaneId::Left, None));
+    submit_name(&app, CommandId::NewDirectory, "After nested view", "Create");
+    updated(&app, &previous);
+    assert_eq!(visible(&app, PaneId::Right), VPath::from(bundle.as_path()));
+    assert!(
+        old_nested.as_path().join("original.txt").exists(),
+        "Retired snapshots must stay available to copies already in progress"
+    );
+    app.emit(AppMsg::NavigateExact(
+        PaneId::Right,
+        VPath::from(bundle.join("nested.zip")),
+    ));
+    wait_until(|| {
+        visible(&app, PaneId::Right) == VPath::from(bundle.join("nested.zip"))
+            && !app.model().pane(PaneId::Right).loading
+            && app
+                .model()
+                .pane(PaneId::Right)
+                .archive_browse
+                .source
+                .is_none()
+    });
+    assert_ne!(
+        root(&app, PaneId::Right),
+        old_nested,
+        "Reopening must use the updated outer archive"
+    );
+
+    // Finishing after navigation refreshes inactive tabs without redirecting the user.
+    let previous = root(&app, PaneId::Left);
+    let later = fixture.path().join("late.txt");
+    std::fs::write(&later, "late import").unwrap();
+    app.emit(AppMsg::ClipboardFiles {
+        pane: PaneId::Left,
+        destination: previous.clone(),
+        result: Ok((vec![VPath::from(later.as_path())], false)),
+        owner: None,
+    });
+    for pane in [PaneId::Left, PaneId::Right] {
+        app.emit(AppMsg::NavigateExact(pane, VPath::from(fixture.path())));
+    }
+    wait_until(|| {
+        app.model().active_operations == 0
+            && app.model().pane(PaneId::Left).tabs[0].path != previous
+    });
+    assert_eq!(root(&app, PaneId::Left), VPath::from(fixture.path()));
+    assert_eq!(root(&app, PaneId::Right), VPath::from(fixture.path()));
+    app.emit(AppMsg::SelectTab(PaneId::Left, 0));
+    wait_until(|| {
+        visible(&app, PaneId::Left) == VPath::from(bundle.as_path())
+            && !app.model().pane(PaneId::Left).loading
+    });
+    assert_eq!(
+        std::fs::read_to_string(root(&app, PaneId::Left).as_path().join("late.txt")).unwrap(),
+        "late import"
+    );
+    app.widget().close();
+}
+
+fn archive_changed(app: &relm4::Controller<AppModel>, previous: &VPath) {
+    wait_until(|| {
+        let model = app.model();
+        !model.history_busy
+            && model.active_operations == 0
+            && !model.pane(PaneId::Left).loading
+            && model.pane(PaneId::Left).archive_browse.source.is_none()
+            && model.pane(PaneId::Left).current_directory() != previous
+    });
+}
+
+#[test]
+#[ignore = "requires an isolated GTK session; run in the native suite"]
+fn gtk_archive_actions_undo_redo_restart_and_recovery() {
+    assert_eq!(std::env::var("COMMANDER_ISOLATED_TEST").as_deref(), Ok("1"));
+    adw::init().unwrap();
+    relm4::main_adw_application()
+        .register(gio::Cancellable::NONE)
+        .unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let file = fixture.path().join("notes.txt");
+    std::fs::write(&file, "original notes").unwrap();
+    let bundle = fixture.path().join("Undo and recovery.zip");
+    archive(&file, &bundle, ArchiveFormat::Zip);
+    let original = std::fs::read(&bundle).unwrap();
+    let stale = open_location(
+        &LocalFs,
+        &VPath::from(bundle.as_path()),
+        &[],
+        &CancelToken::new(),
+    )
+    .unwrap();
+    let session = SessionState {
+        sidebar_visible: false,
+        preview_visible: false,
+        dual_pane: true,
+        window_width: 1320,
+        window_height: 800,
+        ..SessionState::default()
+    };
+    let app = launch(
+        bundle.clone().into(),
+        fixture.path().into(),
+        Some(session.clone()),
+    );
+    app.widget().present();
+    wait_until(|| {
+        app.model()
+            .pane(PaneId::Left)
+            .archive_browse
+            .source
+            .is_none()
+            && !app.model().pane(PaneId::Left).loading
+            && visible(&app, PaneId::Left) == VPath::from(bundle.as_path())
+    });
+    app.emit(AppMsg::ContextTarget(
+        PaneId::Left,
+        Some((
+            root(&app, PaneId::Left).join_name(OsStr::new("notes.txt")),
+            EntryKind::File,
+        )),
+    ));
+    wait_until(|| app.model().action_context(PaneId::Left).items == 1);
+    let policy = app.model().action_context(PaneId::Left);
+    assert_eq!(
+        policy.action(CommandId::Trash).label("Trash"),
+        "Remove from archive…"
+    );
+    assert!(!policy.action(CommandId::EditFile).enabled());
+    app.emit(AppMsg::ExecuteCommand(CommandId::CommandPalette));
+    wait_until(|| app.model().palette_open);
+    let items = app.model().palette_items();
+    assert!(items.iter().any(|item| matches!(
+        item.action,
+        PaletteAction::Command(CommandId::Trash)
+    ) && item.label == "Remove from archive…"));
+    assert!(!items.iter().any(|item| matches!(
+        item.action,
+        PaletteAction::Command(CommandId::EditFile | CommandId::OpenWith | CommandId::Move)
+    )));
+    app.emit(AppMsg::ClosePalette);
+    wait_until(|| !app.model().palette_open && app.widget().visible_dialog().is_none());
+    let previous = root(&app, PaneId::Left);
+    submit_name(&app, CommandId::NewDirectory, "Saved change", "Create");
+    archive_changed(&app, &previous);
+    let updated = std::fs::read(&bundle).unwrap();
+    assert_ne!(updated, original);
+    assert!(matches!(
+        app.model().undo_stack.last(),
+        Some(HistoryEntry::Archive { .. })
+    ));
+    let previous = root(&app, PaneId::Left);
+    app.emit(AppMsg::ExecuteCommand(CommandId::Undo));
+    archive_changed(&app, &previous);
+    assert_eq!(std::fs::read(&bundle).unwrap(), original);
+    assert!(
+        !root(&app, PaneId::Left)
+            .as_path()
+            .join("Saved change")
+            .exists()
+    );
+    let previous = root(&app, PaneId::Left);
+    app.emit(AppMsg::ExecuteCommand(CommandId::Redo));
+    archive_changed(&app, &previous);
+    assert_eq!(std::fs::read(&bundle).unwrap(), updated);
+    wait_until(|| {
+        let (saved, warning) = crate::history_store::load(&crate::history_store::path().unwrap());
+        warning.is_none()
+            && matches!(saved.undo.last(), Some(HistoryEntry::Archive { .. }))
+            && saved.pending.is_none()
+    });
+    app.widget().close();
+    drop(app);
+
+    let app = launch(bundle.clone().into(), fixture.path().into(), Some(session));
+    app.widget().present();
+    wait_until(|| {
+        app.model()
+            .pane(PaneId::Left)
+            .archive_browse
+            .source
+            .is_none()
+            && !app.model().pane(PaneId::Left).loading
+            && visible(&app, PaneId::Left) == VPath::from(bundle.as_path())
+    });
+    assert!(
+        app.model()
+            .action_context(PaneId::Left)
+            .action(CommandId::Undo)
+            .enabled()
+    );
+    let previous = root(&app, PaneId::Left);
+    app.emit(AppMsg::ExecuteCommand(CommandId::Undo));
+    archive_changed(&app, &previous);
+    assert_eq!(std::fs::read(&bundle).unwrap(), original);
+    let previous = root(&app, PaneId::Left);
+    app.emit(AppMsg::ExecuteCommand(CommandId::Redo));
+    archive_changed(&app, &previous);
+    assert_eq!(std::fs::read(&bundle).unwrap(), updated);
+
+    app.emit(AppMsg::ShowRecovery);
+    wait_until(|| {
+        app.widget().visible_dialog().is_some()
+            && app
+                .model()
+                .recovery_records
+                .iter()
+                .any(|record| record.archive.is_some())
+    });
+    let dialog = app.widget().visible_dialog().unwrap();
+    let row = descendants(&dialog)
+        .into_iter()
+        .filter_map(|widget| widget.downcast::<gtk::Button>().ok())
+        .find(|button| {
+            button
+                .label()
+                .is_some_and(|label| label.starts_with("Update archive"))
+        })
+        .unwrap();
+    row.emit_clicked();
+    wait_until(|| {
+        app.widget().visible_dialog().is_some_and(|dialog| {
+            descendants(&dialog)
+                .iter()
+                .filter_map(|widget| widget.downcast_ref::<gtk::Button>())
+                .any(|button| button.label().as_deref() == Some("Restore archive"))
+        })
+    });
+    let detail = app.widget().visible_dialog().unwrap();
+    assert!(descendants(&detail).iter().any(
+        |widget| widget.has_css_class("window-close") && widget.has_css_class("window-action")
+    ));
+    snapshot(app.widget(), "archive-recovery-details-dark");
+    let previous = root(&app, PaneId::Left);
+    dialog_button(&detail, "Restore archive").emit_clicked();
+    archive_changed(&app, &previous);
+    assert_eq!(std::fs::read(&bundle).unwrap(), original);
+    while let Some(dialog) = app.widget().visible_dialog() {
+        dialog.close();
+        wait_until(|| app.widget().visible_dialog().as_ref() != Some(&dialog));
+    }
+    let previous = root(&app, PaneId::Left);
+    app.emit(AppMsg::ExecuteCommand(CommandId::Undo));
+    archive_changed(&app, &previous);
+    assert_eq!(std::fs::read(&bundle).unwrap(), updated);
+    let current = root(&app, PaneId::Left);
+    app.emit(AppMsg::ArchiveReloadReady {
+        source: bundle.clone().into(),
+        id: JobId::next(),
+        result: Ok(stale),
+    });
+    app.emit(AppMsg::SetPaletteQuery("stale refresh processed".into()));
+    wait_until(|| app.model().palette_query == "stale refresh processed");
+    assert_eq!(root(&app, PaneId::Left), current);
+    assert!(current.as_path().join("Saved change").exists());
+    app.widget().close();
+}
+
+#[test]
+#[ignore = "requires an isolated GTK session; run in the native suite"]
+fn gtk_archive_password_creation_unlock_retry_edit_extract_and_cancel() {
+    assert_eq!(std::env::var("COMMANDER_ISOLATED_TEST").as_deref(), Ok("1"));
+    adw::init().unwrap();
+    relm4::main_adw_application()
+        .register(gio::Cancellable::NONE)
+        .unwrap();
+    let fixture = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let notes = fixture.path().join("notes.txt");
+    std::fs::write(&notes, "protected notes").unwrap();
+    let bundle = fixture.path().join("Protected.zip");
+    let other = fixture.path().join("Another.7z");
+    let secret = "synthetic-ui-password";
+    let mut task = ArchiveTask::new(&CancelToken::new());
+    task.set_password(crate::archive::Password::new(secret.into()));
+    create_archive(
+        &LocalFs,
+        &[notes.clone().into()],
+        &other.clone().into(),
+        ArchiveFormat::SevenZ,
+        &mut task,
+    )
+    .unwrap();
+    let app = launch(
+        fixture.path().into(),
+        output.path().into(),
+        Some(SessionState {
+            sidebar_visible: false,
+            preview_visible: false,
+            dual_pane: true,
+            window_width: 1280,
+            window_height: 800,
+            ..SessionState::default()
+        }),
+    );
+    app.widget().present();
+    wait_until(|| !app.model().pane(PaneId::Left).loading);
+    app.emit(AppMsg::ContextTarget(
+        PaneId::Left,
+        Some((notes.into(), EntryKind::File)),
+    ));
+    app.emit(AppMsg::ExecuteCommand(CommandId::CreateArchive));
+    wait_until(|| app.widget().visible_dialog().is_some());
+    let dialog = app.widget().visible_dialog().unwrap();
+    assert_eq!(dialog.title(), "Create Archive");
+    let nodes = descendants(&dialog);
+    assert!(nodes.iter().any(
+        |widget| widget.has_css_class("window-close") && widget.has_css_class("window-action")
+    ));
+    nodes
+        .iter()
+        .find_map(|widget| widget.clone().downcast::<gtk::Entry>().ok())
+        .unwrap()
+        .set_text("Protected");
+    let protect = nodes
+        .iter()
+        .find_map(|widget| widget.clone().downcast::<gtk::CheckButton>().ok())
+        .unwrap();
+    let format = nodes
+        .iter()
+        .find_map(|widget| widget.clone().downcast::<gtk::DropDown>().ok())
+        .unwrap();
+    let fields: Vec<_> = nodes
+        .iter()
+        .filter_map(|widget| widget.clone().downcast::<gtk::PasswordEntry>().ok())
+        .collect();
+    assert_eq!(fields.len(), 2);
+    protect.set_active(true);
+    assert!(!dialog_button(&dialog, "Create").is_sensitive());
+    fields[0].set_text(secret);
+    fields[1].set_text("mismatch");
+    assert!(!dialog_button(&dialog, "Create").is_sensitive());
+    fields[1].set_text(secret);
+    assert!(dialog_button(&dialog, "Create").is_sensitive());
+    format.set_selected(2);
+    assert!(!protect.is_sensitive() && !protect.is_active());
+    format.set_selected(0);
+    protect.set_active(true);
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+    snapshot(app.widget(), "archive-create-password-dark");
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceLight);
+    snapshot(app.widget(), "archive-create-password-light");
+    dialog_button(&dialog, "Create").emit_clicked();
+    wait_until(|| {
+        bundle.exists()
+            && app.model().active_operations == 0
+            && app.widget().visible_dialog().is_none()
+    });
+    assert!(fields.iter().all(|field| field.text().is_empty()));
+    let original = std::fs::read(&bundle).unwrap();
+    app.emit(AppMsg::Navigate(PaneId::Left, bundle.clone().into()));
+    wait_until(|| app.widget().visible_dialog().is_some());
+    let dialog = app.widget().visible_dialog().unwrap();
+    assert_eq!(dialog.title(), "Unlock Archive");
+    let field = descendants(&dialog)
+        .into_iter()
+        .find_map(|widget| widget.downcast::<gtk::PasswordEntry>().ok())
+        .unwrap();
+    assert!(!dialog_button(&dialog, "Unlock").is_sensitive());
+    field.set_text("wrong");
+    dialog_button(&dialog, "Unlock").emit_clicked();
+    wait_until(|| {
+        app.widget()
+            .visible_dialog()
+            .is_some_and(|next| next != dialog)
+    });
+    assert!(field.text().is_empty());
+    let dialog = app.widget().visible_dialog().unwrap();
+    assert!(descendants(&dialog).iter().any(|node| {
+        node.downcast_ref::<gtk::Label>()
+            .is_some_and(|label| label.text().contains("not accepted"))
+    }));
+    adw::StyleManager::default().set_color_scheme(adw::ColorScheme::ForceDark);
+    snapshot(app.widget(), "archive-unlock-retry-dark");
+    let unlock = |dialog: &adw::Dialog| {
+        descendants(dialog)
+            .into_iter()
+            .find_map(|widget| widget.downcast::<gtk::PasswordEntry>().ok())
+            .unwrap()
+            .set_text(secret);
+        dialog_button(dialog, "Unlock").emit_clicked();
+    };
+    unlock(&dialog);
+    wait_until(|| {
+        visible(&app, PaneId::Left) == VPath::from(bundle.as_path())
+            && app
+                .model()
+                .pane(PaneId::Left)
+                .archive_browse
+                .source
+                .is_none()
+            && !app.model().pane(PaneId::Left).loading
+    });
+    let previous = root(&app, PaneId::Left);
+    submit_name(&app, CommandId::NewFile, "new.txt", "Create");
+    archive_changed(&app, &previous);
+    assert!(root(&app, PaneId::Left).as_path().join("new.txt").exists());
+    assert!(
+        app.widget().visible_dialog().is_none(),
+        "edits should reuse the unlocked archive password"
+    );
+    let previous = root(&app, PaneId::Left);
+    app.emit(AppMsg::ExecuteCommand(CommandId::Undo));
+    archive_changed(&app, &previous);
+    assert_eq!(std::fs::read(&bundle).unwrap(), original);
+    app.emit(AppMsg::Navigate(PaneId::Left, fixture.path().into()));
+    wait_until(|| {
+        root(&app, PaneId::Left) == VPath::from(fixture.path())
+            && !app.model().pane(PaneId::Left).loading
+    });
+    app.emit(AppMsg::ContextTarget(
+        PaneId::Left,
+        Some((bundle.clone().into(), EntryKind::File)),
+    ));
+    app.emit(AppMsg::ExecuteCommand(CommandId::ExtractArchive));
+    wait_until(|| app.widget().visible_dialog().is_some());
+    assert_eq!(std::fs::read_dir(output.path()).unwrap().count(), 0);
+    unlock(&app.widget().visible_dialog().unwrap());
+    wait_until(|| app.model().active_operations == 0 && output.path().join("notes.txt").exists());
+    assert_eq!(
+        std::fs::read_to_string(output.path().join("notes.txt")).unwrap(),
+        "protected notes"
+    );
+    app.emit(AppMsg::Navigate(PaneId::Left, other.clone().into()));
+    wait_until(|| app.widget().visible_dialog().is_some());
+    dialog_button(&app.widget().visible_dialog().unwrap(), "Cancel").emit_clicked();
+    wait_until(|| {
+        app.widget().visible_dialog().is_none()
+            && app
+                .model()
+                .pane(PaneId::Left)
+                .archive_browse
+                .source
+                .is_none()
+    });
+    assert_eq!(root(&app, PaneId::Left), VPath::from(fixture.path()));
+    assert!(app.model().pane(PaneId::Left).error.is_none());
+    app.emit(AppMsg::Navigate(PaneId::Left, other.into()));
+    wait_until(|| app.widget().visible_dialog().is_some());
+    app.emit(AppMsg::Navigate(PaneId::Left, output.path().into()));
+    wait_until(|| {
+        app.widget().visible_dialog().is_none()
+            && root(&app, PaneId::Left) == VPath::from(output.path())
+    });
+    assert!(app.model().pane(PaneId::Left).error.is_none());
+    app.widget().close();
 }

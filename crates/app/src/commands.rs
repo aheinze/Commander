@@ -128,7 +128,6 @@ pub enum CommandId {
     CompareDirectories,
     FindDuplicates,
     CompareFiles,
-    EditArchive,
 }
 
 impl CommandId {
@@ -236,7 +235,6 @@ impl CommandId {
             Self::ToggleSortDirection => "toggle-sort-direction",
             Self::FindDuplicates => "find-duplicates",
             Self::CompareFiles => "compare-files",
-            Self::EditArchive => "edit-archive",
             Self::CompareDirectories => "compare-directories",
         }
     }
@@ -383,7 +381,6 @@ pub const COMMANDS: &[CommandDefinition] = &[
     ),
     command(CommandId::FindDuplicates, "Find duplicate files", true),
     command(CommandId::CompareFiles, "Compare files by contents", true),
-    command(CommandId::EditArchive, "Edit archive contents", true),
     command(CommandId::CompareDirectories, "Compare directories", true),
 ];
 

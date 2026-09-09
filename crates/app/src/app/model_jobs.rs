@@ -17,20 +17,26 @@ impl AppModel {
             return;
         }
         let destination = self.pane(source_pane.other()).current_directory().clone();
-        if matches!(command, CommandId::Copy | CommandId::Move)
-            && self.is_archive_browse_path(&destination)
-        {
-            self.pane_mut(source_pane).error =
-                Some("Archive browsing is read-only; copy items out instead".to_owned());
+        if command == CommandId::Copy && self.is_archive_browse_path(&destination) {
+            self.archive_copy(source_pane, sources, destination, sender);
             return;
         }
-        if command != CommandId::Copy
+        if matches!(command, CommandId::Trash | CommandId::DeletePermanent)
             && sources
                 .iter()
                 .any(|source| self.is_archive_browse_path(source))
         {
-            self.pane_mut(source_pane).error =
-                Some("Archive browsing is read-only; copy items out instead".to_owned());
+            self.archive_remove(source_pane, sources, sender);
+            return;
+        }
+        if matches!(command, CommandId::Copy | CommandId::Move)
+            && let Err(reason) = action_policy::transfer(
+                self.location_policy(&sources[0]),
+                self.location_policy(&destination),
+                command == CommandId::Move,
+            )
+        {
+            self.pane_mut(source_pane).error = Some(reason.into());
             return;
         }
         let confirmed_count = sources.len();
@@ -122,6 +128,10 @@ impl AppModel {
         };
         let (pane, kind, handle, history) = match &retry {
             OperationRetry::SecureDelete { .. } => return,
+            OperationRetry::UpdateArchive { pane, request } => {
+                self.start_archive_update(*pane, request.clone(), sender);
+                return;
+            }
             OperationRetry::Copy {
                 pane,
                 sources,
@@ -315,14 +325,19 @@ impl AppModel {
         if sources.is_empty() {
             return;
         }
-        if self.is_archive_browse_path(&destination)
-            || (action == FileDropAction::Move
-                && sources
-                    .iter()
-                    .any(|source| self.is_archive_browse_path(source)))
-        {
-            self.pane_mut(self.active_pane).error =
-                Some("Archive browsing is read-only; copy items out instead".to_owned());
+        if action == FileDropAction::Copy && self.is_archive_browse_path(&destination) {
+            self.archive_copy(self.active_pane, sources, destination, sender);
+            return;
+        }
+        if let Some(reason) = sources.iter().find_map(|source| {
+            action_policy::transfer(
+                self.location_policy(source),
+                self.location_policy(&destination),
+                action == FileDropAction::Move,
+            )
+            .err()
+        }) {
+            self.pane_mut(self.active_pane).error = Some(reason.into());
             return;
         }
         if let Some(source) = sources.iter().find(|source| {
@@ -413,14 +428,19 @@ impl AppModel {
                 Some("Wait for undo or redo to finish before changing files".to_owned());
             return;
         }
-        if self.is_archive_browse_path(&destination)
-            || (cut
-                && sources
-                    .iter()
-                    .any(|source| self.is_archive_browse_path(source)))
-        {
-            self.pane_mut(pane).error =
-                Some("Archive browsing is read-only; copy items out instead".to_owned());
+        if !cut && self.is_archive_browse_path(&destination) {
+            self.archive_copy(pane, sources, destination, sender);
+            return;
+        }
+        if let Some(reason) = sources.iter().find_map(|source| {
+            action_policy::transfer(
+                self.location_policy(source),
+                self.location_policy(&destination),
+                cut,
+            )
+            .err()
+        }) {
+            self.pane_mut(pane).error = Some(reason.into());
             return;
         }
         let transfer = TransferOptions {
@@ -492,7 +512,7 @@ impl AppModel {
             .any(|(path, _)| self.is_archive_browse_path(path))
         {
             self.pane_mut(self.active_pane).error =
-                Some("Archive browsing is read-only; copy items out instead".to_owned());
+                Some("Batch rename is not supported inside archives. Rename entries individually or copy them out first.".to_owned());
             return;
         }
         if let Some(cancel) = self.tool_cancel.take() {
@@ -699,7 +719,7 @@ impl AppModel {
                 self.push_operation_log(format!(
                     "{kind:?} job {} needs a decision for {}",
                     id.get(),
-                    conflict.destination
+                    self.archive_mounts.display(&conflict.destination)
                 ));
                 show_conflict_dialog(self.active_pane, id, conflict_id, &conflict, sender);
             }
@@ -931,6 +951,10 @@ impl AppModel {
         sender: &ComponentSender<Self>,
     ) {
         self.history_busy = false;
+        let archive = match &entry {
+            HistoryEntry::Archive { change } => Some(change.source.clone()),
+            _ => None,
+        };
         match result {
             Ok(()) => {
                 if let HistoryEntry::BatchRename { moves } = &entry {
@@ -966,12 +990,16 @@ impl AppModel {
                     HistoryDirection::Undo => self.undo_stack.push(entry),
                     HistoryDirection::Redo => self.redo_stack.push(entry),
                 }
-                self.pane_mut(self.active_pane).error = Some(error);
+                notifications::error(&error);
             }
         }
         self.persist_history();
-        self.start_listing(PaneId::Left, sender);
-        self.start_listing(PaneId::Right, sender);
+        if let Some(source) = archive {
+            self.on_archive_edited(source, sender);
+        } else {
+            self.start_listing(PaneId::Left, sender);
+            self.start_listing(PaneId::Right, sender);
+        }
     }
 }
 
