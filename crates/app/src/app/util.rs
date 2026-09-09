@@ -293,8 +293,9 @@ pub(super) fn preview_type_label(preview: &Preview) -> String {
         PreviewPayload::Table(document) => format!("{} spreadsheet", document.format),
         PreviewPayload::Markdown { .. } => "Markdown document".to_owned(),
         PreviewPayload::Image { .. } => "Image".to_owned(),
-        PreviewPayload::Pdf { page_count, .. } => {
-            format!("PDF document · {page_count} page{}", plural(*page_count))
+        PreviewPayload::Pdf(document) => {
+            let page_count = document.pages.len();
+            format!("PDF document · {page_count} page{}", plural(page_count))
         }
         PreviewPayload::Text { language, .. } => format!("{language} text"),
         PreviewPayload::Media { kind, .. } => (*kind).to_owned(),

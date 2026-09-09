@@ -99,7 +99,10 @@ pub(super) fn install_shortcuts(
             return glib::Propagation::Proceed;
         }
         if focused.as_ref().is_some_and(|focus| {
-            widget_has_ancestor_css_class(focus, &["markdown-content", "table-preview"])
+            widget_has_ancestor_css_class(
+                focus,
+                &["markdown-content", "table-preview", "pdf-preview"],
+            )
         }) && !matches!(
             keymap.command_for(key, modifiers),
             Some(
@@ -119,6 +122,7 @@ pub(super) fn install_shortcuts(
                     "file-context-menu",
                     "breadcrumb-ancestors",
                     "tools-dialog",
+                    "search-dialog",
                     "settings-dialog",
                     "shortcut-capture-dialog",
                 ],

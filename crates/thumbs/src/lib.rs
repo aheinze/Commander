@@ -3,6 +3,7 @@
 //! Cancellable native thumbnail and preview loading.
 
 pub mod markdown;
+pub mod pdf;
 mod svg;
 mod syntax;
 pub mod table;
@@ -25,7 +26,6 @@ use thiserror::Error;
 const MAX_TEXT_BYTES: usize = 512 * 1_024;
 const MAX_IMAGE_EDGE: u32 = 1_600;
 const MAX_MEDIA_BYTES: usize = 128 * 1_024 * 1_024;
-const DEFAULT_PDF_PREVIEW_SCALE: f32 = 0.5;
 const MAX_THUMBNAIL_SOURCE_EDGE: u32 = 32_768;
 const MAX_THUMBNAIL_DECODE_BYTES: u64 = 256 * 1_024 * 1_024;
 const DEFAULT_THUMBNAIL_WORKERS: usize = 2;
@@ -278,15 +278,7 @@ pub enum PreviewPayload {
         truncated: bool,
         highlights: Vec<SyntaxSpan>,
     },
-    Pdf {
-        bytes: Arc<[u8]>,
-        rgba: Vec<u8>,
-        width: u32,
-        height: u32,
-        page_count: usize,
-        page_number: usize,
-        scale: f32,
-    },
+    Pdf(pdf::PdfDocument),
     Media {
         bytes: Vec<u8>,
         kind: &'static str,
@@ -385,80 +377,7 @@ fn load_pdf(
     if bytes.len() > MAX_MEDIA_BYTES {
         return Ok(PreviewPayload::Unsupported);
     }
-    let bytes: Arc<[u8]> = bytes.into();
-    let page = render_pdf_page(&bytes, 0, DEFAULT_PDF_PREVIEW_SCALE, cancel)?;
-    let page_count = page.page_count();
-    let width = page.width();
-    let height = page.height();
-    Ok(PreviewPayload::Pdf {
-        bytes,
-        width,
-        height,
-        rgba: page.into_rgba(),
-        page_count,
-        page_number: 1,
-        scale: DEFAULT_PDF_PREVIEW_SCALE,
-    })
-}
-
-/// One rendered PDF page plus document pagination information.
-#[derive(Debug)]
-pub struct PdfPage {
-    rgba: Vec<u8>,
-    width: u32,
-    height: u32,
-    page_count: usize,
-}
-
-impl PdfPage {
-    #[must_use]
-    pub const fn width(&self) -> u32 {
-        self.width
-    }
-
-    #[must_use]
-    pub const fn height(&self) -> u32 {
-        self.height
-    }
-
-    #[must_use]
-    pub const fn page_count(&self) -> usize {
-        self.page_count
-    }
-
-    #[must_use]
-    pub fn into_rgba(self) -> Vec<u8> {
-        self.rgba
-    }
-}
-
-/// Renders an arbitrary PDF page on a worker thread.
-///
-/// Page indices are zero-based and the scale is clamped to a safe preview range.
-pub fn render_pdf_page(
-    bytes: &[u8],
-    page_index: usize,
-    scale: f32,
-    cancel: &CancelToken,
-) -> Result<PdfPage, PreviewError> {
-    cancel.check().map_err(|_| PreviewError::Cancelled)?;
-    let document = karet_pdf::Document::load(bytes.to_vec())
-        .map_err(|error| PreviewError::Pdf(error.to_string()))?;
-    let page_count = document.page_count();
-    if page_count == 0 {
-        return Err(PreviewError::Pdf("PDF has no pages".to_owned()));
-    }
-    let page_index = page_index.min(page_count - 1);
-    let page = document
-        .render_page(page_index, scale.clamp(0.3, 2.4))
-        .map_err(|error| PreviewError::Pdf(error.to_string()))?;
-    cancel.check().map_err(|_| PreviewError::Cancelled)?;
-    Ok(PdfPage {
-        width: page.width(),
-        height: page.height(),
-        rgba: page.into_rgba(),
-        page_count,
-    })
+    Ok(PreviewPayload::Pdf(pdf::PdfDocument::load(bytes, cancel)?))
 }
 
 fn load_media(

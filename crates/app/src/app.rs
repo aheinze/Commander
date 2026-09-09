@@ -28,6 +28,9 @@ mod dialogs;
 mod favorites_tests;
 mod fileops;
 mod job_view;
+mod layout;
+#[cfg(test)]
+mod layout_tests;
 #[cfg(test)]
 mod miller_tests;
 mod model_archives;
@@ -52,6 +55,7 @@ mod power_tools;
 mod preview;
 mod recovery;
 mod remote;
+mod search_actions;
 mod search_view;
 mod secure_delete;
 mod settings;
@@ -88,8 +92,7 @@ use dualpane_index::{
 };
 use dualpane_thumbs::{
     Preview, PreviewError, PreviewPayload, Thumbnail, ThumbnailError, ThumbnailFingerprint,
-    ThumbnailRequest, ThumbnailResponse, ThumbnailScheduler, load_preview, render_pdf_page,
-    supports_thumbnail,
+    ThumbnailRequest, ThumbnailResponse, ThumbnailScheduler, load_preview, supports_thumbnail,
 };
 use dualpane_vfs::{LocalFs, Vfs};
 use relm4::adw;
@@ -138,9 +141,7 @@ use self::dialogs::{
 use self::fileops::{apply_history, batch_rename, common_parent, set_mode_tree};
 use self::palette::{matching_commands, palette_query_matches};
 use self::pane_view::{PaneWidgets, ScrollMetrics, install_file_drop_target};
-use self::preview::{
-    PreviewWidgets, QuickLookWidgets, fitted_pdf_scale, git_info_for_path, measure_folder_paths,
-};
+use self::preview::{PreviewWidgets, QuickLookWidgets, git_info_for_path, measure_folder_paths};
 use self::remote::{forget_remote_password, show_remote_dialog, show_remote_error};
 use self::search_view::SearchWidgets;
 use self::shortcuts::{
@@ -175,10 +176,6 @@ const PREVIEW_DEFAULT_WIDTH: i32 = 340;
 const PREVIEW_MIN_WIDTH: i32 = 330;
 const PREVIEW_MAX_WIDTH: i32 = 560;
 const PREVIEW_SETTLE_DELAY: Duration = Duration::from_millis(120);
-const PDF_MIN_SCALE: f32 = 0.15;
-const PDF_MAX_SCALE: f32 = 2.4;
-const PDF_VIEWPORT_HEIGHT: f32 = 210.0;
-const PDF_PREVIEW_HORIZONTAL_INSET: i32 = 60;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PaneId {
@@ -1289,6 +1286,7 @@ pub struct AppModel {
     search_loading: bool,
     search_results: SearchResults,
     search_error: Option<String>,
+    search_session: Option<search_actions::Session>,
     tool_cancel: Option<CancelToken>,
     archive_mounts: archive_browser::ArchiveLocations,
     terminal_visible: bool,
@@ -1425,7 +1423,9 @@ pub enum AppMsg {
         generation: u64,
         result: Result<SearchResults, String>,
     },
-    OpenSearchResult(VPath),
+    SearchAction(search_actions::Request),
+    SearchDeleteConfirmed(search_actions::Request),
+    RefreshSearch,
     SyncReady(Result<usize, String>),
     ChecksumReady {
         path: VPath,
@@ -1562,16 +1562,6 @@ pub enum AppMsg {
     LoadPreview {
         generation: u64,
         path: VPath,
-    },
-    PdfNavigate(i32),
-    PdfZoom(i32),
-    PdfFit,
-    PdfRendered {
-        generation: u64,
-        path: VPath,
-        page_number: usize,
-        scale: f32,
-        result: Result<dualpane_thumbs::PdfPage, PreviewError>,
     },
     SelectionSummaryReady {
         generation: u64,

@@ -2,6 +2,8 @@
 
 use super::*;
 
+mod actions;
+
 #[cfg(test)]
 #[path = "search_view_tests.rs"]
 mod tests;
@@ -13,7 +15,9 @@ pub(super) struct SearchWidgets {
     pub(super) content: gtk::ToggleButton,
     pub(super) status: gtk::Label,
     pub(super) results: gtk::ListView,
+    #[cfg(test)]
     pub(super) result_store: gio::ListStore,
+    pub(super) actions: Rc<actions::Controls>,
     pub(super) stop: gtk::Button,
     pub(super) rendered_open: Rc<Cell<bool>>,
     closing_from_model: Rc<Cell<bool>>,
@@ -37,7 +41,11 @@ fn filter_label(text: &str) -> gtk::Label {
 }
 
 impl SearchWidgets {
-    pub(super) fn new(parent: &adw::ApplicationWindow, sender: &ComponentSender<AppModel>) -> Self {
+    pub(super) fn new(
+        parent: &adw::ApplicationWindow,
+        sender: &ComponentSender<AppModel>,
+        keymap: Keymap,
+    ) -> Self {
         let rendered_open = Rc::new(Cell::new(false));
         let closing_from_model = Rc::new(Cell::new(false));
         let dialog = adw::Dialog::builder()
@@ -151,28 +159,34 @@ impl SearchWidgets {
         let status = gtk::Label::new(Some("0 results"));
         status.add_css_class("search-status");
         status.set_xalign(0.0);
-        root.append(&status);
-        let result_store = gio::ListStore::new::<glib::BoxedAnyObject>();
+        let status_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        status_row.add_css_class("search-summary");
+        status.set_hexpand(true);
+        status_row.append(&status);
+        let refresh = gtk::Button::from_icon_name("commander-refresh-cw-symbolic");
+        refresh.add_css_class("flat");
+        refresh.set_tooltip_text(Some("Refresh search results"));
+        refresh.update_property(&[gtk::accessible::Property::Label("Refresh search results")]);
+        connect_button(&refresh, sender, || AppMsg::RefreshSearch);
+        status_row.append(&refresh);
+        root.append(&status_row);
+        let actions = actions::Controls::new(sender.input_sender().clone(), keymap);
+        #[cfg(test)]
+        let result_store = actions.store.clone();
         let results = gtk::ListView::new(
-            Some(gtk::NoSelection::new(Some(result_store.clone()))),
-            Some(result_factory()),
+            Some(actions.selection.clone()),
+            Some(result_factory(Rc::clone(&actions))),
         );
-        results.set_single_click_activate(true);
+        results.set_single_click_activate(false);
+        results.set_enable_rubberband(true);
         results.add_css_class("search-results");
         results.add_css_class("navigation-sidebar");
+        results.update_property(&[gtk::accessible::Property::Label("Search results"),
+            gtk::accessible::Property::Description("Select results with Control or Shift. Double-click or press Enter to open. Alt+Enter shows the containing folder. Shift+F10 opens file actions.")]);
+        actions.install_keys(&results);
         {
-            let input = sender.input_sender().clone();
-            let result_store = result_store.clone();
-            results.connect_activate(move |_, position| {
-                if let Some(item) = result_store
-                    .item(position)
-                    .and_downcast::<glib::BoxedAnyObject>()
-                {
-                    let _ = input.send(AppMsg::OpenSearchResult(
-                        item.borrow::<SearchHit>().path.clone(),
-                    ));
-                }
-            });
+            let actions = Rc::clone(&actions);
+            results.connect_activate(move |_, position| actions.activate(position));
         }
         let scrolled = gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
@@ -182,10 +196,17 @@ impl SearchWidgets {
             .child(&results)
             .build();
         root.append(&scrolled);
+        let footer = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        footer.add_css_class("dialog-actions");
+        footer.append(&actions.count);
+        footer.append(&actions.reveal);
+        footer.append(&actions.copy);
+        footer.append(&actions.more);
+        root.append(&footer);
         let view = adw::ToolbarView::new();
         view.add_top_bar(&chrome::dialog_header(&dialog));
         view.set_content(Some(&root));
-        dialog.set_child(Some(&view));
+        dialog.set_child(Some(&notifications::wrap(&view)));
 
         let send_search = {
             let input = sender.input_sender().clone();
@@ -292,7 +313,9 @@ impl SearchWidgets {
             content,
             status,
             results,
+            #[cfg(test)]
             result_store,
+            actions,
             stop,
             rendered_open,
             closing_from_model,
@@ -316,8 +339,10 @@ impl SearchWidgets {
             }
         }
         if !model.search_open {
+            self.actions.close_menu();
             return;
         }
+        self.actions.update(model);
         if self.rendered_preset.replace(model.search_content_preset) != model.search_content_preset
         {
             self.content.set_active(model.search_content_preset);
@@ -330,10 +355,10 @@ impl SearchWidgets {
             format!("{} results", report.hits.len())
         });
         let feedback = if model.search_loading
-            || (model.search_generation == 0
-                && report.hits.is_empty()
-                && model.search_error.is_none()
-                && report.first_error.is_none())
+            || (model.search_error.is_none()
+                && report.first_error.is_none()
+                && report.skipped_entries == 0
+                && !report.limit_reached)
         {
             None
         } else {
@@ -355,16 +380,11 @@ impl SearchWidgets {
             },
         );
         if *self.rendered_results.borrow() != report.hits {
-            let items: Vec<_> = report
-                .hits
-                .iter()
-                .cloned()
-                .map(glib::BoxedAnyObject::new)
-                .collect();
-            self.result_store
-                .splice(0, self.result_store.n_items(), &items);
+            self.actions.replace(&report.hits);
             self.rendered_results.replace(report.hits.clone());
-            if let Some(adjustment) = self.results.vadjustment() {
+            if report.hits.is_empty()
+                && let Some(adjustment) = self.results.vadjustment()
+            {
                 adjustment.set_value(0.0);
             }
         }
@@ -388,9 +408,9 @@ fn filter_field(label: &str, control: &impl IsA<gtk::Widget>) -> gtk::Box {
     field
 }
 
-fn result_factory() -> gtk::SignalListItemFactory {
+fn result_factory(actions: Rc<actions::Controls>) -> gtk::SignalListItemFactory {
     let factory = gtk::SignalListItemFactory::new();
-    factory.connect_setup(|_, object| {
+    factory.connect_setup(move |_, object| {
         let item = object.downcast_ref::<gtk::ListItem>().unwrap();
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
         row.add_css_class("search-result-row");
@@ -417,6 +437,28 @@ fn result_factory() -> gtk::SignalListItemFactory {
         row.append(&labels);
         row.append(&detail);
         item.set_child(Some(&row));
+        let gesture = gtk::GestureClick::new();
+        gesture.set_button(3);
+        gesture.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let weak_item = item.downgrade();
+        let weak_row = row.downgrade();
+        let controls = Rc::clone(&actions);
+        gesture.connect_pressed(move |gesture, _, x, y| {
+            let (Some(item), Some(row)) = (weak_item.upgrade(), weak_row.upgrade()) else {
+                return;
+            };
+            let position = item.position();
+            if position == gtk::INVALID_LIST_POSITION {
+                return;
+            }
+            gesture.set_state(gtk::EventSequenceState::Claimed);
+            if !controls.selection.is_selected(position) {
+                controls.selection.select_item(position, true);
+            }
+            row.grab_focus();
+            controls.menu(row.upcast_ref(), Some((x, y)));
+        });
+        row.add_controller(gesture);
         item.connect_notify_local(Some("item"), move |item, _| {
             let Some(value) = item.item().and_downcast::<glib::BoxedAnyObject>() else {
                 return;
@@ -426,7 +468,7 @@ fn result_factory() -> gtk::SignalListItemFactory {
             crate::icons::set_file_icon(&icon, hit.kind, file_name);
             name.set_label(&file_name.to_string_lossy());
             path.set_label(&hit.path.to_string());
-            row.set_tooltip_text(Some(&format!("{}\nShow in containing folder", hit.path)));
+            row.set_tooltip_text(Some(&hit.path.to_string()));
             detail.set_label(&format!(
                 "{}{}",
                 format_size(hit.size, hit.kind),

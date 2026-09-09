@@ -4,19 +4,34 @@ use super::*;
 
 impl AppModel {
     pub(super) fn start_operation(&mut self, command: CommandId, sender: &ComponentSender<Self>) {
+        let pane = self.active_pane;
+        self.start_operation_on_paths(
+            command,
+            pane,
+            self.operation_sources(pane),
+            self.pane(pane.other()).current_directory().clone(),
+            sender,
+        );
+    }
+
+    pub(super) fn start_operation_on_paths(
+        &mut self,
+        command: CommandId,
+        source_pane: PaneId,
+        sources: Vec<VPath>,
+        destination: VPath,
+        sender: &ComponentSender<Self>,
+    ) {
         if self.history_busy {
-            self.pane_mut(self.active_pane).error =
+            self.pane_mut(source_pane).error =
                 Some("Wait for undo or redo to finish before changing files".to_owned());
             return;
         }
-        let source_pane = self.active_pane;
-        let sources = self.operation_sources(source_pane);
         if sources.is_empty() {
             self.pane_mut(source_pane).error =
                 Some("No item is available to operate on".to_owned());
             return;
         }
-        let destination = self.pane(source_pane.other()).current_directory().clone();
         if command == CommandId::Copy && self.is_archive_browse_path(&destination) {
             self.archive_copy(source_pane, sources, destination, sender);
             return;
@@ -30,11 +45,14 @@ impl AppModel {
             return;
         }
         if matches!(command, CommandId::Copy | CommandId::Move)
-            && let Err(reason) = action_policy::transfer(
-                self.location_policy(&sources[0]),
-                self.location_policy(&destination),
-                command == CommandId::Move,
-            )
+            && let Some(reason) = sources.iter().find_map(|source| {
+                action_policy::transfer(
+                    self.location_policy(source),
+                    self.location_policy(&destination),
+                    command == CommandId::Move,
+                )
+                .err()
+            })
         {
             self.pane_mut(source_pane).error = Some(reason.into());
             return;
@@ -660,6 +678,7 @@ impl AppModel {
         result: Result<Vec<(VPath, VPath)>, String>,
         sender: &ComponentSender<Self>,
     ) {
+        self.refresh_search(sender);
         match result {
             Ok(moves) => {
                 self.tool_cancel = None;
@@ -883,7 +902,24 @@ impl AppModel {
         }
         let history = self.pending_history.remove(&id);
         if state == JobState::Done && errors.is_empty() {
-            self.clear_selection(source_pane);
+            // Search, clipboard, and drops may operate on paths unrelated to
+            // the visible selection. Only clear the selection used by this job.
+            let selected: BTreeSet<_> = self.operation_sources(source_pane).into_iter().collect();
+            let operated = self
+                .operations
+                .get(&id)
+                .and_then(|operation| match &operation.retry {
+                    OperationRetry::Copy { sources, .. }
+                    | OperationRetry::Move { sources, .. }
+                    | OperationRetry::Trash { sources, .. }
+                    | OperationRetry::Delete { sources, .. } => {
+                        Some(sources.iter().cloned().collect::<BTreeSet<_>>())
+                    }
+                    _ => None,
+                });
+            if operated.as_ref() == Some(&selected) {
+                self.clear_selection(source_pane);
+            }
             if kind == JobKind::Trash && !trash_records.is_empty() {
                 self.record_history(HistoryEntry::Trash {
                     records: trash_records,
@@ -919,6 +955,7 @@ impl AppModel {
             ));
         }
         self.prune_finished_operations();
+        self.refresh_search(sender);
         self.start_listing(PaneId::Left, sender);
         self.start_listing(PaneId::Right, sender);
     }
@@ -997,6 +1034,7 @@ impl AppModel {
         if let Some(source) = archive {
             self.on_archive_edited(source, sender);
         } else {
+            self.refresh_search(sender);
             self.start_listing(PaneId::Left, sender);
             self.start_listing(PaneId::Right, sender);
         }

@@ -409,6 +409,7 @@ impl AppModel {
                     }
                     self.start_listing(pane, sender);
                 }
+                self.refresh_search(sender);
                 self.persist_session();
             }
             Err(error) => notifications::error(&format!("Could not refresh archive: {error}")),
@@ -462,6 +463,9 @@ impl AppModel {
                 *path = VPath::from(mount.root());
             }
         };
+        if let Some(session) = &mut self.search_session {
+            rebase(&mut session.root);
+        }
         for state in &mut self.panes {
             for tab in &mut state.tabs {
                 for path in std::iter::once(&mut tab.path).chain(tab.history.iter_mut()) {

@@ -8,15 +8,37 @@ impl AppModel {
         options: SearchOptions,
         sender: &ComponentSender<Self>,
     ) {
+        let session = search_actions::Session {
+            pane: self.active_pane,
+            root: self.pane(self.active_pane).current_directory().clone(),
+            options,
+        };
+        self.search_results = SearchResults::default();
+        self.run_search_session(session, sender);
+    }
+
+    pub(super) fn refresh_search(&mut self, sender: &ComponentSender<Self>) {
+        if self.search_open
+            && let Some(session) = self.search_session.clone()
+        {
+            self.run_search_session(session, sender);
+        }
+    }
+
+    fn run_search_session(
+        &mut self,
+        session: search_actions::Session,
+        sender: &ComponentSender<Self>,
+    ) {
         if let Some(cancel) = self.search_cancel.take() {
             cancel.cancel();
         }
+        self.search_session = Some(session.clone());
         self.search_generation = self.search_generation.wrapping_add(1);
         let generation = self.search_generation;
         self.search_loading = true;
         self.search_error = None;
-        self.search_results = SearchResults::default();
-        let root = self.pane(self.active_pane).current_directory().clone();
+        let search_actions::Session { root, options, .. } = session;
         let cancel = CancelToken::new();
         self.search_cancel = Some(cancel.clone());
         let vfs = Arc::clone(&self.vfs);

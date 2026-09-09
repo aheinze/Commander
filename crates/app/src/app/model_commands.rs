@@ -156,8 +156,13 @@ impl AppModel {
 
     pub(super) fn on_copy_or_cut(&mut self, command: CommandId) -> Option<AppMsg> {
         let paths = self.operation_sources(self.active_pane);
+        self.copy_paths_to_clipboard(&paths, command == CommandId::Cut);
+        None
+    }
+
+    pub(super) fn copy_paths_to_clipboard(&mut self, paths: &[VPath], cut: bool) {
         if let Some(display) = gdk::Display::default()
-            && let Some(provider) = clipboard::provider(&paths, command == CommandId::Cut)
+            && let Some(provider) = clipboard::provider(paths, cut)
         {
             match display.clipboard().set_content(Some(&provider)) {
                 Ok(()) => {
@@ -170,7 +175,6 @@ impl AppModel {
                 }
             }
         }
-        None
     }
 
     pub(super) fn on_delete_permanent(&mut self, sender: &ComponentSender<Self>) -> Option<AppMsg> {

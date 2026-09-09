@@ -60,3 +60,41 @@ Creation requires matching nonempty passwords when protection is enabled. ZIP an
 7Z explain whether names are visible; TAR formats disable protection explicitly.
 Unlock requests are tied to the original worker and pane generation. Cancellation
 closes the sheet and cannot navigate a different tab after a late password reply.
+
+## Components
+
+### Search results
+
+Search extends the same native utility-dialog language with an actionable,
+virtualized result list. Its implementation authority is `app/search_view.rs`,
+`app/search_view/actions.rs`, `app/search_actions.rs`, and the shared stylesheet.
+
+- Keep the query, wrapping filter controls, result summary, scrolling list, and
+  separate action footer in their established order. The footer places a muted
+  selection count before “Show in folder”, “Copy”, and “Actions”. “Show in folder”
+  and “Copy” explain unavailable states in their tooltips.
+- Result names lead with medium-weight text (13px); paths and file details use
+  smaller muted text (11px). Names and paths truncate in the middle, with the full
+  path available on the row tooltip. Selection uses the file panels' selected
+  background and foreground; a distinct accent outline identifies keyboard focus.
+- Preserve GTK multi-selection, range selection, and keyboard row activation.
+  Enter opens the focused result, Alt+Enter shows its folder, and Shift+F10 opens
+  the same menu as right-click or “Actions”. Right-click retains an existing
+  selection when the clicked result already belongs to it.
+- Menus use the shared file-menu groups, icons, contextual labels, and shortcut
+  column. A filename or selected-result count identifies the targets. Focus begins
+  at the first available action; arrow keys, Home, and End navigate available
+  actions with a visible focus outline. Destructive labels use the current theme's
+  destructive color, and permanent deletion retains the shared confirmation sheet.
+- **The Captured Selection Rule.** Actions carry the selected result paths and
+  transfer destination captured when the menu opens. A refreshed search preserves
+  selection by path, so reordering or removed rows cannot select another file.
+- Successful result counts remain in the summary. Search warnings, errors, limits,
+  and cancellation use the existing notification surface above the footer, keeping
+  result actions accessible. Mutations and undo use the existing operation engine
+  and refresh the result snapshot, including archive results.
+
+The search workflow tests cover action targets, selection, shared operation and
+refresh behavior, and revealing results in every panel view. The reviewed captures
+cover selected rows and menus in dark mode, the compact light layout, and keyboard
+menu focus in light mode.

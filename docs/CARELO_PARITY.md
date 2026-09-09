@@ -15,8 +15,8 @@ and report progress to the native work inspector.
   remains available with Ctrl+I, preserving usable filename columns.
 - Independent pane tabs, history, sort, hidden-file state, fuzzy filtering, type-ahead
   find with repeated-key cycling, range/multi-selection, and drag/drop moves.
-- Image, text/code, audio, video, and interactive multi-page PDF previews with native
-  paging, true scrollable zoom, and fit-to-page controls, plus a large Quick Look
+- Image, text/code, audio, video, and interactive multi-page PDF previews with continuous
+  scrolling, page entry, document bookmarks, cached zoom, and fit-to-width controls, plus a large Quick Look
   window with keyboard browsing.
 - The resizable, persisted inspector mirrors Carelo's Info, Current Work, and Log
   surfaces: debounced previews, multi-selection summaries, recursive folder sizes,
@@ -58,7 +58,10 @@ and report progress to the native work inspector.
   when their system backend is installed; S3 requires an installed GIO-compatible S3
   provider. Credentials are delegated to the desktop mount operation and are not saved
   in the session file.
-- PDF page rendering uses the pure-Rust hayro/karet-pdf stack; editing uses lopdf.
+- PDF page rendering uses pure-Rust Hayro with a document worker shared by the inspector
+  and Quick Look; editing uses lopdf. Each viewer virtualizes page widgets and keeps a
+  48 MiB raster cache. Previews accept up to 10,000 pages and render at most four million
+  pixels per page. Password-protected previews and text selection/search are not supported.
 - Elevated permission changes use the system PolicyKit prompt and never place a
   password in application memory or command-line arguments.
 

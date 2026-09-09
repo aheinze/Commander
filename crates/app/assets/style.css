@@ -1298,14 +1298,36 @@ paned > separator:hover {
   background: transparent;
 }
 
-.pdf-preview-scroll picture {
-  background: alpha(@carelo_void, 0.22);
+.pdf-preview-scroll {
+  background: alpha(@carelo_void, 0.36);
+}
+
+.pdf-page {
+  background: white;
+  box-shadow: 0 1px 3px alpha(black, 0.18);
+}
+
+.pdf-page-placeholder {
+  color: #667080;
+  font-size: 11px;
+}
+
+.pdf-page-entry {
+  min-height: 25px;
+  padding: 0 3px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+
+.pdf-bookmarks button {
+  padding: 5px 8px;
+  font-size: 12px;
 }
 
 .pdf-preview-controls {
   min-height: 34px;
-  margin-top: 8px;
-  padding: 3px 6px;
+  margin-top: 6px;
+  padding: 2px 4px;
   border: 1px solid alpha(@carelo_hairline, 0.45);
   border-radius: 4px;
   background: alpha(@carelo_void, 0.56);
@@ -1326,8 +1348,13 @@ paned > separator:hover {
   background: @carelo_hover;
 }
 
+.pdf-preview-button:checked {
+  color: @carelo_accent;
+  background: alpha(@carelo_accent, 0.12);
+}
+
 .pdf-preview-page {
-  min-width: 42px;
+  min-width: 32px;
   color: @carelo_muted;
   font-size: 10px;
   font-weight: 600;
@@ -2292,8 +2319,47 @@ dialog.command-palette-dialog sheet {
   color: var(--warning-color);
 }
 
+.search-summary {
+  padding-right: 12px;
+}
+
+.search-result-menu .context-menu-item:focus {
+  background: alpha(@carelo_accent, 0.13);
+  outline: 1px solid alpha(@carelo_accent, 0.55);
+  outline-offset: -1px;
+}
+
+.search-result-menu .context-menu-item.destructive-action:not(:disabled) {
+  color: var(--destructive-color);
+}
+
+.search-result-menu .context-menu-item.destructive-action:hover:not(:disabled) {
+  color: #ffffff;
+}
+
+
+/* Keep feedback above the actions while the result list stays usable. */
+.search-dialog toast {
+  margin-bottom: 66px;
+}
+
+.search-selection-count {
+  color: @carelo_muted;
+  font-size: 12px;
+}
+
 .search-results {
   padding: 2px 10px 12px;
+}
+
+.search-results row:selected {
+  color: @carelo_selected_text;
+  background: @carelo_selected;
+}
+
+.search-results row:focus-within {
+  outline: 2px solid alpha(@carelo_accent, 0.88);
+  outline-offset: -2px;
 }
 
 .search-result-row {
@@ -2326,7 +2392,7 @@ dialog.command-palette-dialog sheet {
 
 .search-result-path,
 .search-result-detail {
-  color: color-mix(in srgb, currentColor 45%, transparent);
+  color: @carelo_muted;
   font-size: 11px;
 }
 
@@ -2691,7 +2757,7 @@ dialog .dialog-hint {
   min-height: 36px;
 }
 
-.dialog-actions button,
+.dialog-actions button:not(.context-menu-item),
 .utility-dialog .dialog-button,
 .tools-dialog .tool-button {
   min-height: 34px;
@@ -2706,39 +2772,39 @@ dialog .dialog-hint {
   transition: background 90ms ease-out;
 }
 
-.dialog-actions button:hover,
+.dialog-actions button:not(.context-menu-item):hover,
 .utility-dialog .dialog-button:hover,
 .tools-dialog .tool-button:hover {
   background: color-mix(in srgb, currentColor 13%, transparent);
 }
 
-.dialog-actions button.suggested-action,
+.dialog-actions button:not(.context-menu-item).suggested-action,
 .utility-dialog .dialog-button.suggested-action,
 .tools-dialog .tool-button.suggested-action {
   color: var(--accent-fg-color);
   background: var(--accent-bg-color);
 }
 
-.dialog-actions button.suggested-action:hover,
+.dialog-actions button:not(.context-menu-item).suggested-action:hover,
 .utility-dialog .dialog-button.suggested-action:hover,
 .tools-dialog .tool-button.suggested-action:hover {
   background: color-mix(in srgb, var(--accent-bg-color) 88%, white);
 }
 
-.dialog-actions button.destructive-action {
+.dialog-actions button:not(.context-menu-item).destructive-action {
   color: #ffffff;
   background: #e5484d;
 }
 
-.dialog-actions button.destructive-action:hover {
+.dialog-actions button:not(.context-menu-item).destructive-action:hover {
   background: #ec5f63;
 }
 
-.secure-delete-dialog .dialog-actions button.destructive-action {
+.secure-delete-dialog .dialog-actions button:not(.context-menu-item).destructive-action {
   background: #bc3543;
 }
 
-.secure-delete-dialog .dialog-actions button.destructive-action:hover {
+.secure-delete-dialog .dialog-actions button:not(.context-menu-item).destructive-action:hover {
   background: #a72d3a;
 }
 
@@ -2940,15 +3006,15 @@ image.commander-file-icon.icon-muted { color: @carelo_icon; }
 }
 
 /* Even a white custom accent stays below #737373 under white action text. */
-.settings-dialog .dialog-actions button.suggested-action,
-.shortcut-capture-dialog .dialog-actions button.suggested-action,
+.settings-dialog .dialog-actions button:not(.context-menu-item).suggested-action,
+.shortcut-capture-dialog .dialog-actions button:not(.context-menu-item).suggested-action,
 .utility-dialog .file-tools button.suggested-action {
   color: #ffffff;
   background: mix(@carelo_accent, #000000, 0.60);
 }
 
-.settings-dialog .dialog-actions button.suggested-action:hover,
-.shortcut-capture-dialog .dialog-actions button.suggested-action:hover,
+.settings-dialog .dialog-actions button:not(.context-menu-item).suggested-action:hover,
+.shortcut-capture-dialog .dialog-actions button:not(.context-menu-item).suggested-action:hover,
 .utility-dialog .file-tools button.suggested-action:hover {
   background: mix(@carelo_accent, #000000, 0.55);
 }

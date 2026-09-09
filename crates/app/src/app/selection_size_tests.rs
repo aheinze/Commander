@@ -214,7 +214,17 @@ fn gtk_selection_totals_update_in_every_view() {
     wait_status(&app, "1 selected · 10 B");
 
     // Selected files change size without a new click: native folder updates refresh the total.
-    app.emit(AppMsg::OpenSearchResult(VPath::from(dir.path().join("a"))));
+    app.emit(AppMsg::SearchAction(search_actions::Request {
+        command: CommandId::Reveal,
+        hits: vec![SearchHit {
+            path: VPath::from(dir.path().join("a")),
+            kind: EntryKind::File,
+            size: 0,
+            content_match: false,
+        }],
+        pane: PaneId::Left,
+        destination: VPath::from(dir.path()),
+    }));
     wait_until(|| {
         !app.model().pane(PaneId::Left).loading
             && app.model().pane(PaneId::Left).current_directory() == &VPath::from(dir.path())

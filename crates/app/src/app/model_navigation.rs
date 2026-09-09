@@ -744,6 +744,7 @@ impl AppModel {
         result: Result<(), String>,
         sender: &ComponentSender<Self>,
     ) {
+        self.refresh_search(sender);
         match result {
             Ok(()) => {
                 if let Some(color) = self.tags.remove(&source.to_string()) {

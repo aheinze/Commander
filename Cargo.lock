@@ -765,7 +765,7 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 
 [[package]]
 name = "dualpane-app"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "directories",
  "dualpane-core",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "dualpane-benches"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "criterion",
  "dualpane-core",
@@ -815,14 +815,14 @@ dependencies = [
 
 [[package]]
 name = "dualpane-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "dualpane-engine"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "crossbeam-channel",
  "dualpane-core",
@@ -837,7 +837,7 @@ dependencies = [
 
 [[package]]
 name = "dualpane-index"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "crossbeam-channel",
  "dualpane-core",
@@ -854,7 +854,7 @@ dependencies = [
 
 [[package]]
 name = "dualpane-platform"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "dualpane-core",
  "libc",
@@ -864,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "dualpane-thumbs"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "calamine",
  "cfb",
@@ -872,8 +872,9 @@ dependencies = [
  "csv",
  "dualpane-core",
  "dualpane-vfs",
+ "hayro",
  "image",
- "karet-pdf",
+ "lopdf",
  "percent-encoding",
  "pulldown-cmark",
  "resvg",
@@ -886,7 +887,7 @@ dependencies = [
 
 [[package]]
 name = "dualpane-vfs"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "dualpane-core",
  "dualpane-platform",
@@ -1884,16 +1885,6 @@ dependencies = [
  "cfg-if",
  "futures-util",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "karet-pdf"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "964289f0667275dc93c5ce24761158596fccd5771114f9b132fda51569c41845"
-dependencies = [
- "hayro",
- "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -4279,7 +4270,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "dualpane-core",
  "dualpane-engine",

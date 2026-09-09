@@ -286,6 +286,23 @@ Only visible folders are monitored; reopening a hidden pane or tab refreshes its
 contents. If native monitoring cannot be established, that folder is checked every
 five seconds while visible, with monitoring retried. Idle native watches do not poll.
 
+## PDF previews
+
+The inspector and Quick Look display PDFs as a continuously scrolling document.
+Fit-to-width follows the available space. Use the page field or previous/next
+buttons to jump, and the bookmarks button to open the document's table of contents
+when one is present. Zoom keeps your vertical reading position.
+
+When the PDF is focused, use Ctrl+L to enter a page number, Ctrl++/Ctrl+− to zoom,
+Ctrl+0 to fit the width, Alt+↑/Alt+↓ for adjacent pages, and Home/End for the first
+or last page. Arrow keys and Page Up/Page Down scroll the document. Click the file
+panel or use the configured Focus files shortcut to return to file navigation.
+
+Rendering stays on a background worker with nearby pages cached and offscreen
+page widgets released. PDF previews accept files up to 128 MiB and 10,000 pages;
+each page raster is limited to four million pixels and a 4096-pixel edge. Text
+selection, text search, OCR, and password-protected PDF previews are not supported.
+
 ## Spreadsheet previews
 
 Excel (`.xlsx`, `.xlsm`, `.xlsb`, `.xls`), CSV, and TSV files open as read-only
@@ -523,6 +540,40 @@ a `DUALPANE_FILTER` response/worker/queue breakdown and exits.
 ## Power-user file tools
 
 Open **More → File tools**, use the command palette, or assign shortcuts in Settings.
+
+### Actionable search results
+
+Search names, paths, or file contents with the existing search filters. Click to
+select a result; use Ctrl-click or Shift-click to select several, including items
+from different folders. Double-click or Enter opens the focused result. **Show in
+folder** (Alt+Enter) closes Search and selects the result in its containing folder.
+
+Right-click a result, press Shift+F10/Menu, or use **Actions** for file operations.
+Right-clicking an unselected result selects it; clicking an already selected result
+keeps the multi-selection. Menus show the item name or selection count, and capture
+the paths and transfer destination when opened.
+
+- Copy/cut files and copy their paths; paste into a selected folder.
+- Copy or move the selection to the other pane using its existing job/conflict UI.
+- Rename one item or open batch rename for multiple items.
+- Move to Trash, or confirm permanent deletion of the captured selection.
+- Open, choose an application, open a folder/archive in a new tab, or show it in the
+  other pane. Available actions follow the same archive restrictions as file panels.
+
+With the results focused, the configured keymap applies to clipboard actions,
+selection, rename, cross-pane transfers, delete, undo, and redo. Ctrl+A selects all;
+Enter and Alt+Enter retain the native open/reveal behavior. Menu arrows, Home, and
+End move focus between actions. Keys typed in the query and filter fields stay in
+those fields.
+
+Changes made through Commander refresh the original search root and options while
+Search is open. Unchanged selected paths stay selected when results reorder;
+removed results disappear. Use the refresh button for changes made outside
+Commander. Archive edits refresh after the replacement archive snapshot is ready.
+A selected folder already covers its matching children for transfers, deletion,
+and batch rename, so those children are not processed twice. File jobs and undo
+reuse the normal operation engine; search actions leave unrelated pane selections
+intact. Missing or inaccessible targets report errors through toasts.
 
 ### Batch rename preview
 

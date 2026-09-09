@@ -13,7 +13,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 rust-version = "1.96"
 license = "MIT"
@@ -35,7 +35,7 @@ dualpane-thumbs = { path = "crates/thumbs" }
 dualpane-vfs = { path = "crates/vfs" }
 insta = "1.48.0"
 image = { version = "0.25.8", default-features = false, features = ["bmp", "gif", "ico", "jpeg", "png", "pnm", "tga", "tiff", "webp"] }
-karet-pdf = "0.6.0"
+hayro = "0.7.1"
 libc = "0.2.189"
 lopdf = { version = "0.38.0", default-features = false }
 notify = "8.2.0"

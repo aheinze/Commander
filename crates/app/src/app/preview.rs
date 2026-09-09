@@ -3,6 +3,7 @@
 use super::*;
 
 mod markdown;
+mod pdf;
 #[cfg(test)]
 mod svg_tests;
 mod table;
@@ -18,6 +19,7 @@ pub(super) struct QuickLookWidgets {
     pub(super) text_view: gtk::TextView,
     markdown_view: markdown::MarkdownView,
     table_view: table::TableView,
+    pdf_view: pdf::PdfView,
     pub(super) status: gtk::Label,
     pub(super) title: gtk::Label,
     pub(super) detail: gtk::Label,
@@ -65,6 +67,8 @@ impl QuickLookWidgets {
         picture.set_can_shrink(true);
         picture.set_content_fit(gtk::ContentFit::Contain);
         stack.add_named(&picture, Some("image"));
+        let pdf_view = pdf::PdfView::new();
+        stack.add_named(&pdf_view.root, Some("pdf"));
         let video = gtk::Video::new();
         video.set_autoplay(true);
         video.set_loop(false);
@@ -115,7 +119,17 @@ impl QuickLookWidgets {
         {
             let input = sender.input_sender().clone();
             let table_root = table_view.root.clone();
+            let pdf_root = pdf_view.root.clone();
             keys.connect_key_pressed(move |_, key, _, _| {
+                if pdf_root.is_mapped()
+                    && (matches!(key, gdk::Key::Up | gdk::Key::Down)
+                        || pdf_root
+                            .root()
+                            .and_then(|root| root.focus())
+                            .is_some_and(|focus| focus.is_ancestor(&pdf_root)))
+                {
+                    return glib::Propagation::Proceed;
+                }
                 if table_root.is_mapped()
                     && table_root
                         .root()
@@ -151,6 +165,7 @@ impl QuickLookWidgets {
             text_view,
             markdown_view,
             table_view,
+            pdf_view,
             status,
             title,
             detail,
@@ -168,6 +183,8 @@ impl QuickLookWidgets {
             }
         }
         if !model.quick_look_open {
+            self.pdf_view.clear();
+            self.rendered_preview.set((u64::MAX, false));
             return;
         }
         let state = &model.preview_state;
@@ -177,6 +194,7 @@ impl QuickLookWidgets {
         }
         self.rendered_preview.set(key);
         self.table_view.clear();
+        self.pdf_view.clear();
         self.title.set_label(
             state
                 .path
@@ -258,25 +276,14 @@ impl QuickLookWidgets {
                 self.picture.set_paintable(Some(&texture));
                 self.stack.set_visible_child_name("image");
             }
-            PreviewPayload::Pdf {
-                rgba,
-                width,
-                height,
-                page_count,
-                ..
-            } => {
+            PreviewPayload::Pdf(document) => {
                 pause_video(&self.video);
-                if set_picture_rgba(&self.picture, rgba, *width, *height) {
-                    self.detail.set_label(&format!(
-                        "PDF · {page_count} page{} · Space to close · ←/→ to browse",
-                        if *page_count == 1 { "" } else { "s" }
-                    ));
-                    self.stack.set_visible_child_name("image");
-                } else {
-                    notifications::error("PDF page is too large to preview");
-                    self.status.set_label("");
-                    self.stack.set_visible_child_name("status");
-                }
+                self.pdf_view.render(document);
+                self.detail.set_label(&format!(
+                    "PDF · {} pages · Scroll to read · Ctrl+L to go to a page",
+                    document.pages.len()
+                ));
+                self.stack.set_visible_child_name("pdf");
             }
             PreviewPayload::Text {
                 content,
@@ -319,17 +326,12 @@ pub(super) struct PreviewWidgets {
     pub(super) content_stack: gtk::Stack,
     pub(super) icon: gtk::Image,
     pub(super) picture: gtk::Picture,
-    pub(super) pdf_picture: gtk::Picture,
     pub(super) video: gtk::Video,
     pub(super) text_view: gtk::TextView,
     markdown_view: markdown::MarkdownView,
     table_view: table::TableView,
+    pdf_view: pdf::PdfView,
     pub(super) content_status: gtk::Label,
-    pub(super) pdf_controls: gtk::Box,
-    pub(super) pdf_previous: gtk::Button,
-    pub(super) pdf_next: gtk::Button,
-    pub(super) pdf_page: gtk::Label,
-    pub(super) pdf_zoom: gtk::Label,
     pub(super) rendered_preview: Cell<(u64, bool, usize)>,
     pub(super) identity: gtk::Box,
     pub(super) name: gtk::Label,
@@ -438,18 +440,9 @@ impl PreviewWidgets {
         picture.set_can_shrink(true);
         picture.set_content_fit(gtk::ContentFit::Contain);
         content_stack.add_named(&picture, Some("image"));
-        let pdf_picture = gtk::Picture::new();
-        pdf_picture.set_can_shrink(false);
-        pdf_picture.set_content_fit(gtk::ContentFit::Contain);
-        pdf_picture.set_halign(gtk::Align::Start);
-        pdf_picture.set_valign(gtk::Align::Start);
-        let pdf_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Automatic)
-            .vscrollbar_policy(gtk::PolicyType::Automatic)
-            .child(&pdf_picture)
-            .build();
-        pdf_scroll.add_css_class("pdf-preview-scroll");
-        content_stack.add_named(&pdf_scroll, Some("pdf"));
+        let pdf_view = pdf::PdfView::new();
+        content_stack.set_vhomogeneous(false);
+        content_stack.add_named(&pdf_view.root, Some("pdf"));
         let video = gtk::Video::new();
         video.set_autoplay(true);
         video.set_loop(false);
@@ -496,46 +489,6 @@ impl PreviewWidgets {
         multi.append(&multi_icon);
         content_stack.add_named(&multi, Some("multi"));
         hero.append(&content_stack);
-        let pdf_controls = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        pdf_controls.set_halign(gtk::Align::Center);
-        pdf_controls.add_css_class("pdf-preview-controls");
-        pdf_controls.set_visible(false);
-        let pdf_previous = gtk::Button::from_icon_name("commander-chevron-left-symbolic");
-        pdf_previous.set_tooltip_text(Some("Previous PDF page"));
-        pdf_previous.add_css_class("pdf-preview-button");
-        connect_button(&pdf_previous, sender, || AppMsg::PdfNavigate(-1));
-        let pdf_page = gtk::Label::new(Some("1 / 1"));
-        pdf_page.add_css_class("pdf-preview-page");
-        let pdf_next = gtk::Button::from_icon_name("commander-chevron-right-symbolic");
-        pdf_next.set_tooltip_text(Some("Next PDF page"));
-        pdf_next.add_css_class("pdf-preview-button");
-        connect_button(&pdf_next, sender, || AppMsg::PdfNavigate(1));
-        let zoom_out = gtk::Button::from_icon_name("commander-zoom-out-symbolic");
-        zoom_out.set_tooltip_text(Some("Zoom out"));
-        zoom_out.add_css_class("pdf-preview-button");
-        connect_button(&zoom_out, sender, || AppMsg::PdfZoom(-1));
-        let zoom_fit = gtk::Button::from_icon_name("commander-scan-symbolic");
-        zoom_fit.set_tooltip_text(Some("Fit page"));
-        zoom_fit.add_css_class("pdf-preview-button");
-        connect_button(&zoom_fit, sender, || AppMsg::PdfFit);
-        let pdf_zoom = gtk::Label::new(Some("100%"));
-        pdf_zoom.add_css_class("pdf-preview-page");
-        let zoom_in = gtk::Button::from_icon_name("commander-zoom-in-symbolic");
-        zoom_in.set_tooltip_text(Some("Zoom in"));
-        zoom_in.add_css_class("pdf-preview-button");
-        connect_button(&zoom_in, sender, || AppMsg::PdfZoom(1));
-        for widget in [
-            pdf_previous.upcast_ref::<gtk::Widget>(),
-            pdf_page.upcast_ref::<gtk::Widget>(),
-            pdf_next.upcast_ref::<gtk::Widget>(),
-            zoom_out.upcast_ref::<gtk::Widget>(),
-            zoom_fit.upcast_ref::<gtk::Widget>(),
-            pdf_zoom.upcast_ref::<gtk::Widget>(),
-            zoom_in.upcast_ref::<gtk::Widget>(),
-        ] {
-            pdf_controls.append(widget);
-        }
-        hero.append(&pdf_controls);
         info_box.append(&hero);
 
         let identity = gtk::Box::new(gtk::Orientation::Vertical, 3);
@@ -739,17 +692,12 @@ impl PreviewWidgets {
             content_stack,
             icon,
             picture,
-            pdf_picture,
             video,
             text_view,
             markdown_view,
             table_view,
+            pdf_view,
             content_status,
-            pdf_controls,
-            pdf_previous,
-            pdf_next,
-            pdf_page,
-            pdf_zoom,
             rendered_preview: Cell::new((u64::MAX, false, usize::MAX)),
             identity,
             name,
@@ -1051,13 +999,9 @@ impl PreviewWidgets {
             PreviewPayload::Image { width, height, .. } => {
                 Some(("Image".to_owned(), format!("{width} × {height}")))
             }
-            PreviewPayload::Pdf {
-                page_count,
-                page_number,
-                ..
-            } => Some((
+            PreviewPayload::Pdf(document) => Some((
                 "PDF document".to_owned(),
-                format!("Page {page_number} of {page_count}"),
+                format!("{} pages", document.pages.len()),
             )),
             PreviewPayload::Text {
                 language,
@@ -1171,8 +1115,9 @@ impl PreviewWidgets {
             return;
         }
         self.rendered_preview.set(key);
-        self.pdf_controls.set_visible(false);
+        self.content_stack.set_height_request(220);
         self.table_view.clear();
+        self.pdf_view.clear();
         if selected_count > 1 {
             pause_video(&self.video);
             self.content_stack.set_visible_child_name("multi");
@@ -1245,43 +1190,11 @@ impl PreviewWidgets {
                 self.picture.set_paintable(Some(&texture));
                 self.content_stack.set_visible_child_name("image");
             }
-            PreviewPayload::Pdf {
-                rgba,
-                width,
-                height,
-                page_count,
-                page_number,
-                scale,
-                ..
-            } => {
+            PreviewPayload::Pdf(document) => {
                 pause_video(&self.video);
-                if set_picture_rgba(&self.pdf_picture, rgba, *width, *height) {
-                    let (Ok(width_request), Ok(height_request)) =
-                        (i32::try_from(*width), i32::try_from(*height))
-                    else {
-                        notifications::error("PDF page is too large to preview");
-                        self.content_status.set_label("");
-                        self.content_stack.set_visible_child_name("status");
-                        return;
-                    };
-                    self.pdf_picture
-                        .set_size_request(width_request, height_request);
-                    self.pdf_picture.set_tooltip_text(Some(&format!(
-                        "PDF · page {page_number} of {page_count}"
-                    )));
-                    self.content_stack.set_visible_child_name("pdf");
-                    self.pdf_page
-                        .set_label(&format!("{page_number} / {page_count}"));
-                    self.pdf_zoom
-                        .set_label(&format!("{}%", (*scale * 100.0).round() as u32));
-                    self.pdf_previous.set_sensitive(*page_number > 1);
-                    self.pdf_next.set_sensitive(*page_number < *page_count);
-                    self.pdf_controls.set_visible(true);
-                } else {
-                    notifications::error("PDF page is too large to preview");
-                    self.content_status.set_label("");
-                    self.content_stack.set_visible_child_name("status");
-                }
+                self.pdf_view.render(document);
+                self.content_stack.set_height_request(420);
+                self.content_stack.set_visible_child_name("pdf");
             }
             PreviewPayload::Text {
                 content,
@@ -1715,50 +1628,6 @@ pub(super) fn set_video_bytes(video: &gtk::Video, data: &[u8]) {
     media.play();
 }
 
-pub(super) fn set_picture_rgba(
-    picture: &gtk::Picture,
-    rgba: &[u8],
-    width: u32,
-    height: u32,
-) -> bool {
-    let (Ok(width), Ok(height)) = (i32::try_from(width), i32::try_from(height)) else {
-        return false;
-    };
-    let bytes = glib::Bytes::from_owned(rgba.to_vec());
-    let texture = gdk::MemoryTexture::new(
-        width,
-        height,
-        gdk::MemoryFormat::R8g8b8a8,
-        &bytes,
-        usize::try_from(width).unwrap_or(0).saturating_mul(4),
-    );
-    picture.set_paintable(Some(&texture));
-    true
-}
-
-pub(super) fn fitted_pdf_scale(
-    rendered_width: u32,
-    rendered_height: u32,
-    current_scale: f32,
-    inspector_width: i32,
-) -> f32 {
-    if rendered_width == 0
-        || rendered_height == 0
-        || !current_scale.is_finite()
-        || current_scale <= 0.0
-    {
-        return PDF_MIN_SCALE;
-    }
-    let native_width = rendered_width as f32 / current_scale;
-    let native_height = rendered_height as f32 / current_scale;
-    let available_width = inspector_width
-        .saturating_sub(PDF_PREVIEW_HORIZONTAL_INSET)
-        .max(1) as f32;
-    (available_width / native_width)
-        .min(PDF_VIEWPORT_HEIGHT / native_height)
-        .clamp(PDF_MIN_SCALE, PDF_MAX_SCALE)
-}
-
 pub(super) fn pause_video(video: &gtk::Video) {
     if let Some(stream) = video.media_stream() {
         stream.pause();
@@ -1768,16 +1637,6 @@ pub(super) fn pause_video(video: &gtk::Video) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pdf_fit_uses_both_viewport_dimensions() {
-        let portrait = fitted_pdf_scale(298, 421, 0.5, 340);
-        assert!((portrait - 0.2494).abs() < 0.002);
-
-        let landscape = fitted_pdf_scale(421, 298, 0.5, 340);
-        assert!((landscape - 0.3325).abs() < 0.002);
-        assert_eq!(fitted_pdf_scale(0, 0, 0.0, 340), PDF_MIN_SCALE);
-    }
 
     #[test]
     fn inspector_folder_measurement_counts_nested_content() {

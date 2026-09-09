@@ -14,7 +14,7 @@ crossbeam-channel.workspace = true
 dualpane-core.workspace = true
 dualpane-vfs.workspace = true
 image.workspace = true
-karet-pdf.workspace = true
+hayro.workspace = true
 pulldown-cmark.workspace = true
 percent-encoding.workspace = true
 resvg.workspace = true
@@ -24,6 +24,7 @@ thiserror.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+lopdf.workspace = true
 tempfile.workspace = true
 
 [lints]

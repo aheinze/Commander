@@ -24,6 +24,15 @@ impl AppModel {
     pub(super) fn review_archive_removal(&mut self, sender: &ComponentSender<Self>) {
         let pane = self.active_pane;
         let sources = self.operation_sources(pane);
+        self.review_archive_removal_on_paths(pane, sources, sender);
+    }
+
+    pub(super) fn review_archive_removal_on_paths(
+        &mut self,
+        pane: PaneId,
+        sources: Vec<VPath>,
+        sender: &ComponentSender<Self>,
+    ) {
         let Some(mount) = sources
             .first()
             .and_then(|path| self.archive_mounts.mount_for(path))

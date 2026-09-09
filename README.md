@@ -27,8 +27,9 @@ nested folders visible as you explore.
 Type to filter a folder, use the command palette to find an action, and work through
 selections with familiar shortcuts. Choose the Classic or Modern keymap, then make
 it your own in Settings with searchable commands, shortcut capture, and conflict
-handling. Search names, paths, and file contents when you need to look beyond the
-current folder.
+handling. Search names, paths, and file contents beyond the current folder, then
+select results to copy, move, rename, or trash them directly. Open results or reveal
+them in their containing folders.
 
 ### Bring the terminal to your files
 
@@ -44,6 +45,9 @@ information help you understand a directory, while live updates keep listings an
 previews in step with changes from other applications.
 Markdown documents render with headings, lists, tables, code blocks, links, and
 local images, so READMEs and project notes are ready to read.
+Read PDFs with continuous scrolling, page jumps, document bookmarks, and zoom that
+keeps your place. Fit-to-width follows the panel size, and pages render in the
+background as you browse.
 
 ### Know what your file operations are doing
 

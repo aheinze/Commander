@@ -171,6 +171,7 @@ impl SimpleComponent for AppModel {
             search_loading: false,
             search_results: SearchResults::default(),
             search_error: None,
+            search_session: None,
             tool_cancel: None,
             archive_mounts: archive_browser::ArchiveLocations::default(),
             terminal_visible: false,
@@ -408,7 +409,7 @@ impl SimpleComponent for AppModel {
         );
         let preview = PreviewWidgets::new(&sender);
         let quick_look = QuickLookWidgets::new(&window, &sender);
-        let search = SearchWidgets::new(&window, &sender);
+        let search = SearchWidgets::new(&window, &sender, model.keymap.clone());
         let workspace_paned = gtk::Paned::new(gtk::Orientation::Horizontal);
         workspace_paned.set_widget_name("inspector-split");
         workspace_paned.add_css_class("workspace");
@@ -491,33 +492,7 @@ impl SimpleComponent for AppModel {
             });
             workspace_paned.add_controller(reset_click);
         }
-        paned.connect_map(|paned| {
-            let paned = paned.clone();
-            glib::idle_add_local_once(move || {
-                let extent = if paned.orientation() == gtk::Orientation::Horizontal {
-                    paned.width()
-                } else {
-                    paned.height()
-                };
-                let minimum_pane = 240.min(extent / 2);
-                if extent > 0
-                    && (paned.position() < minimum_pane
-                        || paned.position() > extent.saturating_sub(minimum_pane))
-                {
-                    paned.set_position(extent / 2);
-                }
-            });
-        });
-        paned.connect_notify_local(Some("width"), |paned, _| {
-            if paned.orientation() == gtk::Orientation::Horizontal && paned.width() > 0 {
-                paned.set_position(paned.width() / 2);
-            }
-        });
-        paned.connect_notify_local(Some("height"), |paned, _| {
-            if paned.orientation() == gtk::Orientation::Vertical && paned.height() > 0 {
-                paned.set_position(paned.height() / 2);
-            }
-        });
+        layout::install_pane_constraints(&paned);
 
         {
             let input = sender.input_sender().clone();
@@ -814,14 +789,13 @@ impl SimpleComponent for AppModel {
                 self.search_open = true;
                 self.search_content_preset = content;
             }
+            AppMsg::SearchAction(request) => self.search_action(request, false, &sender),
+            AppMsg::SearchDeleteConfirmed(request) => self.search_action(request, true, &sender),
+            AppMsg::RefreshSearch => self.refresh_search(&sender),
             AppMsg::CloseSearch => self.on_close_search(),
             AppMsg::CancelSearch => self.on_cancel_search(),
             AppMsg::RunSearch(options) => self.start_recursive_search(options, &sender),
             AppMsg::SearchReady { generation, result } => self.on_search_ready(generation, result),
-            AppMsg::OpenSearchResult(path) => {
-                self.on_close_search();
-                self.reveal_path(self.active_pane, path, &sender);
-            }
             AppMsg::SyncReady(result) => self.on_sync_ready(result, &sender),
             AppMsg::ChecksumReady { path, result } => {
                 self.tool_cancel = None;
@@ -949,16 +923,6 @@ impl SimpleComponent for AppModel {
                 path,
                 result,
             } => self.on_preview_ready(generation, path, result, &sender),
-            AppMsg::PdfNavigate(delta) => self.on_pdf_navigate(delta, &sender),
-            AppMsg::PdfZoom(delta) => self.on_pdf_zoom(delta, &sender),
-            AppMsg::PdfFit => self.on_pdf_fit(&sender),
-            AppMsg::PdfRendered {
-                generation,
-                path,
-                page_number,
-                scale,
-                result,
-            } => self.on_pdf_rendered(generation, path, page_number, scale, result),
             AppMsg::SelectionSummaryReady {
                 generation,
                 summary,
