@@ -1,6 +1,4 @@
-![Commander in dark mode with two file panes, sidebar favorites, and an integrated terminal](docs/images/commander-workspace.png)
-
-<img src="packaging/org.example.Dualpane.png" alt="Commander app icon" width="88" align="right">
+[![Commander — Your files. Your flow. Try the native Linux file manager.](docs/images/commander-banner.png)](#get-started)
 
 # Commander
 
@@ -12,6 +10,8 @@ organizing a project to comparing a backup, Commander brings the next step into
 view.
 
 [Get started](#get-started) · [Explore the features](#made-for-everyday-file-work) · [Read the guide](docs/REFERENCE.md) · [Report an issue](https://github.com/aheinze/Commander/issues)
+
+![Commander in dark mode with two file panes, sidebar favorites, and an integrated terminal](docs/images/commander-workspace.png)
 
 ## Made for everyday file work
 
