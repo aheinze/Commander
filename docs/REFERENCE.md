@@ -119,6 +119,12 @@ Each file panel's status bar has a terminal button on the right. It opens a new
 terminal tab in that panel's current folder, reveals the terminal panel, and
 focuses the new session.
 
+The terminal supports Unicode and color emoji through the system's font fallback.
+Install a color emoji font such as Noto Color Emoji to display them. Skin tones,
+flags, keycaps, and joined emoji stay together in two terminal columns, including
+when output arrives in separate chunks. Selecting either half copies the whole
+emoji. Text presentation and ordinary combining accents are also preserved.
+
 In Git working trees, each panel's status bar also shows a muted branch indicator
 for its current folder, following tab changes and the last column. `*` marks
 uncommitted changes, or `!` marks merge conflicts; nonzero `↑` and `↓` counts show

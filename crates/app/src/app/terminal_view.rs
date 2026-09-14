@@ -59,13 +59,29 @@ impl TerminalScreenState {
         if rows == 0 || cols == 0 {
             return None;
         }
-        let end_col = end.col.saturating_add(1).min(cols);
-        let text = self.parser.screen().contents_between(
-            start.row.min(rows - 1),
-            start.col,
-            end.row.min(rows - 1),
-            end_col,
-        );
+        let terminal = self.parser.screen();
+        let start_row = start.row.min(rows - 1);
+        let end_row = end.row.min(rows - 1);
+        let mut start_col = start.col.min(cols - 1);
+        if terminal
+            .cell(start_row, start_col)
+            .is_some_and(vt100::Cell::is_wide_continuation)
+        {
+            start_col = start_col.saturating_sub(1);
+        }
+        let end_width = if terminal
+            .cell(end_row, end.col)
+            .is_some_and(vt100::Cell::is_wide)
+        {
+            2
+        } else {
+            1
+        };
+        let end_col = end.col.saturating_add(end_width).min(cols);
+        let text = self
+            .parser
+            .screen()
+            .contents_between(start_row, start_col, end_row, end_col);
         (!text.is_empty()).then_some(text)
     }
 }
@@ -89,6 +105,68 @@ pub(super) const TERMINAL_PADDING_X: f64 = 10.0;
 pub(super) const TERMINAL_PADDING_Y: f64 = 7.0;
 
 pub(super) type ActiveTerminalScreen = Rc<RefCell<Option<Rc<RefCell<TerminalScreenState>>>>>;
+
+// Shape a whole terminal grapheme so Pango can fall back to a color emoji
+// font and resolve variation selectors, skin tones, flags and ZWJ sequences.
+fn terminal_text_layout(
+    context: &gtk::pango::Context,
+    text: &str,
+    bold: bool,
+    italic: bool,
+) -> gtk::pango::Layout {
+    let layout = gtk::pango::Layout::new(context);
+    let mut font = gtk::pango::FontDescription::from_string("monospace");
+    font.set_absolute_size(TERMINAL_FONT_SIZE * f64::from(gtk::pango::SCALE));
+    font.set_weight(if bold {
+        gtk::pango::Weight::Bold
+    } else {
+        gtk::pango::Weight::Normal
+    });
+    font.set_style(if italic {
+        gtk::pango::Style::Italic
+    } else {
+        gtk::pango::Style::Normal
+    });
+    layout.set_font_description(Some(&font));
+    layout.set_auto_dir(false);
+    layout.set_single_paragraph_mode(true);
+    layout.set_text(text);
+    layout
+}
+
+fn draw_terminal_text(
+    context: &gtk::cairo::Context,
+    layout: &gtk::pango::Layout,
+    x: f64,
+    y: f64,
+    columns: u16,
+) {
+    let (ink, logical) = layout.pixel_extents();
+    let left = ink.x().min(0);
+    let right = (ink.x() + ink.width()).max(logical.width());
+    let top = ink.y().min(0);
+    let bottom = (ink.y() + ink.height()).max(logical.height());
+    let cell_width = TERMINAL_CELL_WIDTH * f64::from(columns);
+    // Fallback fonts may have larger metrics than the terminal's monospace
+    // font. Fit them inside their cells, preserving the glyph's proportions.
+    let scale = (cell_width / f64::from((right - left).max(1)))
+        .min(TERMINAL_CELL_HEIGHT / f64::from((bottom - top).max(1)))
+        .min(1.0);
+    let baseline = f64::from(layout.baseline()) / f64::from(gtk::pango::SCALE);
+    let min_y = -f64::from(top) * scale;
+    let max_y = (TERMINAL_CELL_HEIGHT - f64::from(bottom) * scale).max(min_y);
+    let offset_y = (TERMINAL_CELL_HEIGHT - 4.0 - baseline * scale).clamp(min_y, max_y);
+    if context.save().is_err() {
+        return;
+    }
+    context.rectangle(x, y, cell_width, TERMINAL_CELL_HEIGHT);
+    context.clip();
+    context.translate(x - f64::from(left) * scale, y + offset_y);
+    context.scale(scale, scale);
+    context.move_to(0.0, 0.0);
+    pangocairo::functions::show_layout(context, layout);
+    let _ = context.restore();
+}
 
 pub(super) fn terminal_dimensions(width: i32, height: i32) -> (u16, u16) {
     let usable_width = (f64::from(width) - TERMINAL_PADDING_X * 2.0).max(1.0);
@@ -219,6 +297,10 @@ pub(super) fn draw_terminal(
     let selection = screen.selection;
     let cursor =
         (terminal.scrollback() == 0 && !terminal.hide_cursor()).then(|| terminal.cursor_position());
+    let pango_context = area.pango_context();
+    // Most cells repeat the same characters. Share shaped layouts throughout
+    // this frame without retaining an unbounded history of terminal output.
+    let mut layouts = std::collections::HashMap::new();
 
     for row in 0..rows {
         for col in 0..cols {
@@ -228,9 +310,14 @@ pub(super) fn draw_terminal(
             if cell.is_wide_continuation() {
                 continue;
             }
-            let point = TerminalPoint { row, col };
-            let selected = selection.is_some_and(|value| terminal_point_selected(value, point));
-            let cursor_cell = cursor == Some((row, col));
+            let columns = if cell.is_wide() { 2 } else { 1 };
+            let selected = selection.is_some_and(|value| {
+                (col..col + columns)
+                    .any(|col| terminal_point_selected(value, TerminalPoint { row, col }))
+            });
+            let cursor_cell = cursor.is_some_and(|(cursor_row, cursor_col)| {
+                cursor_row == row && (col..col + columns).contains(&cursor_col)
+            });
             let mut cell_foreground = terminal_ansi_color(cell.fgcolor(), foreground, cell.bold());
             let mut cell_background = terminal_ansi_color(cell.bgcolor(), background, false);
             if cell.inverse() {
@@ -271,27 +358,28 @@ pub(super) fn draw_terminal(
                     cell_foreground.2 * 0.65,
                 );
             }
-            context.select_font_face(
-                "monospace",
-                if cell.italic() {
-                    gtk::cairo::FontSlant::Italic
-                } else {
-                    gtk::cairo::FontSlant::Normal
-                },
-                if cell.bold() {
-                    gtk::cairo::FontWeight::Bold
-                } else {
-                    gtk::cairo::FontWeight::Normal
-                },
-            );
-            context.set_font_size(TERMINAL_FONT_SIZE);
+            let layout = layouts
+                .entry((cell.contents(), cell.bold(), cell.italic()))
+                .or_insert_with(|| {
+                    terminal_text_layout(
+                        &pango_context,
+                        cell.contents(),
+                        cell.bold(),
+                        cell.italic(),
+                    )
+                });
             context.set_source_rgb(cell_foreground.0, cell_foreground.1, cell_foreground.2);
             let x = TERMINAL_PADDING_X + f64::from(col) * TERMINAL_CELL_WIDTH;
             let y =
                 TERMINAL_PADDING_Y + f64::from(row) * TERMINAL_CELL_HEIGHT + TERMINAL_CELL_HEIGHT
                     - 4.0;
-            context.move_to(x, y);
-            let _ = context.show_text(cell.contents());
+            draw_terminal_text(
+                context,
+                layout,
+                x,
+                TERMINAL_PADDING_Y + f64::from(row) * TERMINAL_CELL_HEIGHT,
+                columns,
+            );
             if cell.underline() {
                 context.set_line_width(1.0);
                 context.move_to(x, y + 2.0);
@@ -938,6 +1026,205 @@ mod tests {
         );
         assert_eq!(screen.parser.screen().cursor_position(), (1, 4));
         assert!(screen.parser.screen().contents().contains("red\nnext"));
+    }
+
+    const EMOJI: &[&str] = &[
+        "😀",
+        "🚀",
+        "📁",
+        "✅",
+        "❤️",
+        "👍🏽",
+        "👩‍💻",
+        "🇩🇪",
+        "1️⃣",
+        "👨‍👩‍👧‍👦",
+        "👩🏽‍❤️‍💋‍👨🏻",
+        "🏴\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}",
+    ];
+
+    #[test]
+    fn terminal_emoji_keep_two_columns_across_pty_chunks() {
+        for emoji in EMOJI {
+            let output = format!("A{emoji}B");
+            for chunk_size in [1, 2, 3, 4, 7, output.len()] {
+                let mut screen = TerminalScreenState::new();
+                for bytes in output.as_bytes().chunks(chunk_size) {
+                    screen.process(bytes);
+                }
+                let terminal = screen.parser.screen();
+                assert_eq!(terminal.contents(), output, "{emoji}, chunks={chunk_size}");
+                assert_eq!(terminal.cursor_position(), (0, 4), "{emoji}");
+                assert_eq!(terminal.cell(0, 1).unwrap().contents(), *emoji);
+                assert!(terminal.cell(0, 1).unwrap().is_wide());
+                assert!(terminal.cell(0, 2).unwrap().is_wide_continuation());
+                assert_eq!(terminal.cell(0, 3).unwrap().contents(), "B");
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_emoji_wrap_and_scroll_as_complete_graphemes() {
+        for emoji in EMOJI {
+            for prefix in ["ab", "abc", "abcd\r\nab", "abcd\r\nabc"] {
+                let mut screen = TerminalScreenState::new();
+                screen.resize(2, 4);
+                for byte in format!("{prefix}{emoji}X").bytes() {
+                    screen.process(&[byte]);
+                }
+                let terminal = screen.parser.screen();
+                let mut reference = TerminalScreenState::new();
+                reference.resize(2, 4);
+                reference.process(format!("{prefix}界X").as_bytes());
+                assert_eq!(
+                    terminal.cursor_position(),
+                    reference.parser.screen().cursor_position()
+                );
+                assert_eq!(
+                    terminal.contents(),
+                    reference.parser.screen().contents().replace('界', emoji)
+                );
+                let found = (0..2)
+                    .flat_map(|row| (0..4).map(move |col| (row, col)))
+                    .find(|&(row, col)| terminal.cell(row, col).unwrap().contents() == *emoji)
+                    .unwrap_or_else(|| panic!("missing complete {emoji} after {prefix:?}"));
+                assert!(found.1 <= 2, "wide grapheme cannot straddle rows");
+                assert!(
+                    terminal
+                        .cell(found.0, found.1 + 1)
+                        .unwrap()
+                        .is_wide_continuation()
+                );
+                assert!(terminal.contents().ends_with('X'));
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_copy_from_either_emoji_cell_preserves_the_sequence() {
+        for emoji in EMOJI {
+            let mut screen = TerminalScreenState::new();
+            screen.process(format!("A{emoji}B").as_bytes());
+            for col in [1, 2] {
+                let point = TerminalPoint { row: 0, col };
+                screen.selection = Some(TerminalSelection {
+                    anchor: point,
+                    focus: point,
+                });
+                assert_eq!(screen.selected_text().as_deref(), Some(*emoji));
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_emoji_preserve_attributes_overwrite_and_control_boundaries() {
+        let mut screen = TerminalScreenState::new();
+        screen.process("\x1b[31;1;3;4m👩‍💻\x1b[0mX".as_bytes());
+        let cell = screen.parser.screen().cell(0, 0).unwrap();
+        assert_eq!(cell.fgcolor(), vt100::Color::Idx(1));
+        assert!(cell.bold() && cell.italic() && cell.underline());
+        screen.process(b"\rA");
+        assert_eq!(screen.parser.screen().contents(), "A X");
+        assert!(
+            !screen
+                .parser
+                .screen()
+                .cell(0, 1)
+                .unwrap()
+                .is_wide_continuation()
+        );
+        screen.process("\r👍\x1b[2C🏽".as_bytes());
+        assert_eq!(screen.parser.screen().cell(0, 0).unwrap().contents(), "👍");
+        assert_eq!(screen.parser.screen().cell(0, 4).unwrap().contents(), "🏽");
+
+        let mut screen = TerminalScreenState::new();
+        screen.process("é e\u{301} 中文 🇩🇪🇫🇷".as_bytes());
+        assert_eq!(screen.parser.screen().contents(), "é e\u{301} 中文 🇩🇪🇫🇷");
+        assert_eq!(screen.parser.screen().cursor_position(), (0, 13));
+        screen.process("\x1b[?1049h🚀\x1b[?1049l".as_bytes());
+        assert_eq!(screen.parser.screen().contents(), "é e\u{301} 中文 🇩🇪🇫🇷");
+        screen.resize(4, 40);
+        assert!(screen.parser.screen().contents().contains("🇩🇪🇫🇷"));
+    }
+
+    #[test]
+    fn terminal_combining_input_has_bounded_cell_storage() {
+        let mut screen = TerminalScreenState::new();
+        screen.process(format!("a{}Z", "\u{301}".repeat(10_000)).as_bytes());
+        assert!(screen.parser.screen().cell(0, 0).unwrap().contents().len() <= 54);
+        assert_eq!(screen.parser.screen().cursor_position(), (0, 2));
+        assert_eq!(screen.parser.screen().cell(0, 1).unwrap().contents(), "Z");
+    }
+
+    #[test]
+    #[ignore = "requires an isolated GTK session and a color emoji font; run with scripts/test-native.py"]
+    fn gtk_terminal_renders_color_emoji_inside_their_cells() {
+        gtk::init().unwrap();
+        let area = gtk::DrawingArea::new();
+        let pango_context = area.pango_context();
+        for emoji in EMOJI {
+            for (bold, italic) in [(false, false), (true, false), (false, true)] {
+                let layout = terminal_text_layout(&pango_context, emoji, bold, italic);
+                assert_eq!(
+                    layout.unknown_glyphs_count(),
+                    0,
+                    "missing emoji glyph: {emoji}"
+                );
+            }
+        }
+        let mut screen = TerminalScreenState::new();
+        screen.resize(16, 80);
+        screen.process(b"\x1b[?25l");
+        for (index, emoji) in EMOJI.iter().enumerate() {
+            screen.process(format!("|{emoji}|  emoji {:02}\r\n", index + 1).as_bytes());
+        }
+        screen.process("\x1b[1mBold 🚀\x1b[0m  \x1b[3mItalic 👩‍💻\x1b[0m  \x1b[4mUnderline 👍🏽\x1b[0m\r\nASCII 0123456789   é e\u{301} 中文".as_bytes());
+        let active = Rc::new(RefCell::new(Some(Rc::new(RefCell::new(screen)))));
+        let mut surface =
+            gtk::cairo::ImageSurface::create(gtk::cairo::Format::ARgb32, 660, 310).unwrap();
+        {
+            let context = gtk::cairo::Context::new(&surface).unwrap();
+            draw_terminal(&area, &context, 660, 310, &active);
+        }
+        surface.flush();
+        let stride = surface.stride() as usize;
+        let data = surface.data().unwrap();
+        if let Some(directory) = std::env::var_os("COMMANDER_TERMINAL_SNAPSHOT_DIR") {
+            let screenshot = image::RgbaImage::from_fn(660, 310, |x, y| {
+                let offset = y as usize * stride + x as usize * 4;
+                let pixel = u32::from_ne_bytes(data[offset..offset + 4].try_into().unwrap());
+                image::Rgba([
+                    (pixel >> 16) as u8,
+                    (pixel >> 8) as u8,
+                    pixel as u8,
+                    (pixel >> 24) as u8,
+                ])
+            });
+            screenshot
+                .save(std::path::Path::new(&directory).join("terminal-emoji.png"))
+                .unwrap();
+        }
+        for (row, emoji) in EMOJI.iter().enumerate() {
+            let mut colored = 0;
+            let mut visible = 0;
+            for y in (7 + row * 18)..(7 + (row + 1) * 18) {
+                for x in 18..34 {
+                    let pixel = &data[y * stride + x * 4..][..3];
+                    if *pixel.iter().max().unwrap() > 80 {
+                        visible += 1;
+                    }
+                    if pixel.iter().max().unwrap() - pixel.iter().min().unwrap() > 60 {
+                        colored += 1;
+                    }
+                }
+            }
+            assert!(visible > 5, "{emoji} must produce visible glyphs");
+            // Some emoji designs (notably Noto's family icon) are neutral.
+            // Check actual color on representative colorful glyphs instead.
+            if matches!(*emoji, "😀" | "🚀" | "📁" | "❤️" | "🇩🇪") {
+                assert!(colored > 5, "{emoji} must render in color");
+            }
+        }
     }
 
     #[test]

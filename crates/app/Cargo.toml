@@ -27,6 +27,7 @@ flate2.workspace = true
 image.workspace = true
 lopdf.workspace = true
 portable-pty.workspace = true
+pangocairo.workspace = true
 vt100.workspace = true
 regex.workspace = true
 relm4.workspace = true

@@ -10,6 +10,7 @@ members = [
     "crates/vfs",
     "xtask",
 ]
+exclude = ["vendor/vt100"]
 resolver = "3"
 
 [workspace.package]
@@ -42,6 +43,7 @@ notify = "8.2.0"
 nucleo = "0.5.0"
 proptest = "1.11.0"
 portable-pty = "0.9.0"
+pangocairo = "0.22.0"
 pulldown-cmark = { version = "0.13.4", default-features = false }
 percent-encoding = "2.3.2"
 vt100 = "0.16.2"
@@ -88,3 +90,6 @@ unused_lifetimes = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
+
+[patch.crates-io]
+vt100 = { path = "vendor/vt100" }

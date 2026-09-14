@@ -18,6 +18,8 @@ The native runner requires Python 3, `dbus-run-session`, GNU `timeout`, and Mutt
 with headless Wayland support. `--backend x11` instead uses Xvfb, `xvfb-run`, and
 `xauth`. Build dependencies are the same GTK/libadwaita dependencies as the app.
 An existing `PKG_CONFIG_PATH` is honored.
+The terminal rendering regression also requires a color emoji font, such as
+Noto Color Emoji (`fonts-noto-color-emoji` on Debian/Ubuntu).
 
 Every ignored app test is discovered automatically, except the FTP integration
 tests run by the separate loopback fixture below. Each native test receives its own process,
