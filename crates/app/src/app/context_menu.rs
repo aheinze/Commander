@@ -103,9 +103,10 @@ pub(super) fn context_target_at(
             None
         };
         if let Some(kind) = kind
-            && let Some(path) = picked.tooltip_text()
+            && let Some(uri) = picked.widget_name().strip_prefix("commander-context:")
+            && let Some(path) = gio::File::for_uri(uri).path()
         {
-            return Some((VPath::from(path.as_str()), kind));
+            return Some((VPath::from(path), kind));
         }
         if picked == *widget {
             return None;

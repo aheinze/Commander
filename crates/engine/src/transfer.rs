@@ -221,7 +221,8 @@ pub fn copy_plan(
         .filter_map(|entry| entry.hardlink_to)
         .collect::<HashSet<_>>();
 
-    if let Ok(Some(available)) = vfs.available_space(destination)
+    if !control.is_retry()
+        && let Ok(Some(available)) = vfs.available_space(destination)
         && available < plan.total_bytes
     {
         control.pause();
@@ -256,7 +257,32 @@ pub fn copy_plan(
             entry.relative_path != root.relative_path
                 && entry.relative_path.starts_with(&root.relative_path)
         });
-        let target = entry_target(entry, destination, &staged_roots, &redirects);
+        let mut target = entry_target(entry, destination, &staged_roots, &redirects);
+        if let Some(record) = crate::retry::candidate(vfs, entry, &target, control) {
+            if entry.metadata.kind == EntryKind::Directory {
+                target = record.destination.clone();
+                redirects.push((entry.relative_path.clone(), target.clone()));
+            } else if crate::retry::verified(vfs, entry, record, control) {
+                control.checkpoint()?;
+                let mut record = record.clone();
+                record.source_removed = false;
+                destination_by_plan_index.insert(index, record.destination.clone());
+                if let Some(journal) = control.journal()
+                    && let Err(error) = journal.transfer(&record)
+                {
+                    outcome.errors.push(error);
+                    continue;
+                }
+                outcome.completed_items += 1;
+                progress(TransferProgress {
+                    path: entry.source.clone(),
+                    bytes: entry.metadata.size,
+                    items_finished: 1,
+                });
+                outcome.transfers.push(record);
+                continue;
+            }
+        }
         let final_target = target.clone();
         let inside_fresh_directory = fresh_directories.iter().any(|directory| {
             entry.relative_path != *directory && entry.relative_path.starts_with(directory)
@@ -408,7 +434,32 @@ pub fn copy_plan(
         {
             continue;
         }
-        let target = entry_target(entry, destination, &staged_roots, &redirects);
+        let mut target = entry_target(entry, destination, &staged_roots, &redirects);
+        if let Some(record) = crate::retry::candidate(vfs, entry, &target, control) {
+            if entry.metadata.kind == EntryKind::Directory {
+                target = record.destination.clone();
+                redirects.push((entry.relative_path.clone(), target.clone()));
+            } else if crate::retry::verified(vfs, entry, record, control) {
+                control.checkpoint()?;
+                let mut record = record.clone();
+                record.source_removed = false;
+                destination_by_plan_index.insert(index, record.destination.clone());
+                if let Some(journal) = control.journal()
+                    && let Err(error) = journal.transfer(&record)
+                {
+                    outcome.errors.push(error);
+                    continue;
+                }
+                outcome.completed_items += 1;
+                progress(TransferProgress {
+                    path: entry.source.clone(),
+                    bytes: entry.metadata.size,
+                    items_finished: 1,
+                });
+                outcome.transfers.push(record);
+                continue;
+            }
+        }
         let resolution = match destination_conflict(
             vfs,
             entry,
@@ -856,26 +907,33 @@ fn process_entry(
             copy_directory(vfs, entry, &target_path, target, directories, control).map(|()| 0)
         }
         EntryKind::File => {
-            if let Some(first) = entry.hardlink_to
+            let linked = if let Some(first) = entry.hardlink_to
                 && let Some(first_target) = destination_by_plan_index.get(&first)
             {
-                copy_hardlink(vfs, first_target, &target_path, target, outcome, control).map(|()| 0)
+                copy_hardlink(vfs, first_target, &target_path, target, outcome, control)
             } else {
-                copy_file(
-                    vfs,
-                    entry,
-                    &target_path,
-                    FileCopy {
-                        target,
-                        tree_staged: placement.target_tree_staged,
-                        verify: options.verify,
-                        durable: options.durable,
-                    },
-                    control,
-                    outcome,
-                    progress,
-                )
-            }
+                Ok(false)
+            };
+            linked.and_then(|linked| {
+                if linked {
+                    Ok(0)
+                } else {
+                    copy_file(
+                        vfs,
+                        entry,
+                        &target_path,
+                        FileCopy {
+                            target,
+                            tree_staged: placement.target_tree_staged,
+                            verify: options.verify,
+                            durable: options.durable,
+                        },
+                        control,
+                        outcome,
+                        progress,
+                    )
+                }
+            })
         }
         EntryKind::Symlink => {
             copy_symlink(vfs, entry, &target_path, target, outcome, control).map(|()| 0)
@@ -1335,18 +1393,39 @@ fn copy_hardlink(
     state: TargetState,
     outcome: &mut TransferOutcome,
     control: &JobControl,
-) -> Result<(), JobError> {
+) -> Result<bool, JobError> {
     let temp = vacant_temp_path(vfs, target)?;
     control.intent("prepare temporary", None, &temp)?;
-    vfs.hard_link(first_target, &temp)
-        .map_err(|error| JobError::from_vfs(target.clone(), "recreate hard link", &error))?;
+    match vfs.hard_link(first_target, &temp) {
+        Ok(()) => {}
+        Err(error)
+            if matches!(error, VfsError::Unsupported { .. })
+                // Linux also reports EPERM when a filesystem (including GVfs)
+                // cannot create hard links. Ordinary verified copying still
+                // enforces read/write permissions for the actual file data.
+                || error.raw_os_error() == Some(1)
+                || matches!(
+                    error.io_kind(),
+                    Some(std::io::ErrorKind::Unsupported | std::io::ErrorKind::CrossesDevices)
+                ) =>
+        {
+            return Ok(false);
+        }
+        Err(error) => {
+            return Err(JobError::from_vfs(
+                target.clone(),
+                "recreate hard link",
+                &error,
+            ));
+        }
+    }
     let result = publish_target(vfs, &temp, target, state.overwrite, control);
     if result.is_err() {
         let _ = vfs.remove(&temp, EntryKind::File);
     }
     result?;
     outcome.used(CopyMethod::HardLink);
-    Ok(())
+    Ok(true)
 }
 
 fn copy_symlink(

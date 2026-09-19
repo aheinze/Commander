@@ -4,7 +4,10 @@
 
 mod connection;
 mod connection_form;
+pub(super) mod requests;
 mod saved;
+#[cfg(test)]
+mod sftp_tests;
 pub(super) use saved::{relative_mount_path, save_location};
 
 pub(crate) use connection::RemoteConnection;
@@ -398,7 +401,13 @@ pub(super) fn show_remote_dialog(
 /// Explains a failed connection and offers the ways out of it: fix the
 /// address, or retry (with a fresh credential prompt when it looks like the
 /// password was the problem).
-pub(super) fn show_remote_error(uri: String, error: String, sender: &ComponentSender<AppModel>) {
+pub(super) fn show_remote_error(
+    pane: PaneId,
+    tab: u64,
+    uri: String,
+    error: String,
+    sender: &ComponentSender<AppModel>,
+) {
     let Some(window) = relm4::main_application().active_window() else {
         return;
     };
@@ -439,8 +448,16 @@ pub(super) fn show_remote_error(uri: String, error: String, sender: &ComponentSe
     let input = sender.input_sender().clone();
     dialog.connect_response(None, move |_, response| {
         let _ = match response {
-            "retry" => input.send(AppMsg::ConnectRemote(uri.clone())),
-            "forget" => input.send(AppMsg::ForgetRemotePassword(uri.clone())),
+            "retry" => input.send(AppMsg::ConnectRemoteInPane {
+                pane,
+                tab,
+                uri: uri.clone(),
+            }),
+            "forget" => input.send(AppMsg::ForgetRemotePassword {
+                pane,
+                tab,
+                uri: uri.clone(),
+            }),
             "edit" => input.send(AppMsg::EditRemote(uri.clone())),
             _ => Ok(()),
         };
@@ -863,6 +880,7 @@ fn show_password_prompt(
     dialog.set_close_response("cancel");
     dialog.set_default_response(Some("connect"));
     dialog.set_response_appearance("connect", adw::ResponseAppearance::Suggested);
+    dialog.close_on_abort(operation);
     let operation = operation.clone();
     dialog.connect_response(None, move |_, response| {
         if response != "connect" {
@@ -912,6 +930,7 @@ fn show_question_prompt(operation: &gio::MountOperation, message: &str, choices:
     if let Some(last) = ids.last() {
         dialog.set_default_response(Some(last));
     }
+    dialog.close_on_abort(operation);
     let operation = operation.clone();
     dialog.connect_response(None, move |_, response| {
         match ids.iter().position(|id| id == response) {

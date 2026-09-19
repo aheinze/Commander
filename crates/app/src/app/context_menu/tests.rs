@@ -435,7 +435,78 @@ fn gtk_tab_folder_menu_targets_inactive_tabs_and_preserves_selection() {
     assert!(document.is_file());
     assert!(other.join("also-keep.txt").is_file());
     assert!(app.model().folder_action_target.is_none());
+
+    // Remote Trash uses the same permanent-delete review, with an explanation.
+    // Exercise it on disposable files, never a user's connected server.
+    let remote_folder = fixture.path().join("remote folder");
+    let remote_file = fixture.path().join("remote file.txt");
+    std::fs::create_dir_all(remote_folder.join("nested")).unwrap();
+    std::fs::write(remote_folder.join("nested/child.txt"), "child").unwrap();
+    std::fs::write(&remote_file, "file").unwrap();
+    let sources = vec![
+        VPath::from(remote_folder.as_path()),
+        VPath::from(remote_file.as_path()),
+    ];
+    wait_until(|| app.widget().visible_dialog().is_none());
+    for confirm in [false, true] {
+        show_permanent_delete_dialog(PaneId::Left, sources.clone(), true, app.sender().clone());
+        wait_until(|| app.widget().visible_dialog().is_some());
+        let dialog = app.widget().visible_dialog().unwrap();
+        let body = alert_body(dialog.upcast_ref()).unwrap();
+        assert!(body.contains("Trash is not available"));
+        assert!(body.contains("all 2 selected items"));
+        assert!(body.contains("cannot be undone"));
+        assert!(body.contains(&remote_folder.display().to_string()));
+        assert!(body.contains(&remote_file.display().to_string()));
+        assert_eq!(
+            dialog.default_widget().unwrap(),
+            dialog_response(&dialog, "Cancel").upcast::<gtk::Widget>()
+        );
+        assert!(remote_folder.join("nested/child.txt").is_file());
+        assert!(remote_file.is_file());
+        assert_eq!(app.model().active_operations, 0);
+
+        // Changing the active pane/target while reviewing must not replace the
+        // captured selection. Cancelling must leave both reviewed items intact.
+        app.emit(AppMsg::ContextTarget(
+            PaneId::Right,
+            Some((VPath::from(other.join("also-keep.txt")), EntryKind::File)),
+        ));
+        wait_until(|| app.model().active_pane == PaneId::Right);
+        dialog_response(&dialog, if confirm { "Delete" } else { "Cancel" }).emit_clicked();
+        wait_until(|| app.widget().visible_dialog().is_none());
+        if confirm {
+            wait_until(|| {
+                !remote_folder.exists()
+                    && !remote_file.exists()
+                    && app.model().active_operations == 0
+            });
+        } else {
+            assert!(remote_folder.join("nested/child.txt").is_file());
+            assert!(remote_file.is_file());
+            assert_eq!(app.model().active_operations, 0);
+        }
+    }
+    assert!(document.is_file());
+    assert!(other.join("also-keep.txt").is_file());
+    assert!(app.model().operations.values().all(|op| op.error.is_none()));
     app.widget().close();
+}
+
+fn alert_body(widget: &gtk::Widget) -> Option<String> {
+    if let Some(label) = widget.downcast_ref::<gtk::Label>()
+        && label.has_css_class("alert-body")
+    {
+        return Some(label.text().to_string());
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        child = widget.next_sibling();
+        if let Some(body) = alert_body(&widget) {
+            return Some(body);
+        }
+    }
+    None
 }
 
 fn dialog_response(dialog: &adw::Dialog, label: &str) -> gtk::Button {
@@ -650,4 +721,36 @@ fn snapshot(app: &relm4::Controller<AppModel>, popover: &gtk::Popover, name: &st
         .render_texture(&node, None)
         .save_to_png(std::path::Path::new(&directory).join(format!("{name}.png")))
         .unwrap();
+}
+
+#[test]
+#[ignore = "requires an isolated GTK display; run in the native suite"]
+fn gtk_context_target_preserves_native_bytes_and_updates_recycled_rows() {
+    use std::os::unix::ffi::OsStringExt;
+    assert_eq!(std::env::var("COMMANDER_ISOLATED_TEST").as_deref(), Ok("1"));
+    adw::init().unwrap();
+    let window = gtk::Window::new();
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    row.append(&gtk::Label::new(Some("file")));
+    window.set_child(Some(&row));
+    window.set_default_size(200, 100);
+    window.present();
+    wait_until(|| row.width() > 0 && row.is_mapped());
+    for (bytes, kind) in [
+        (b"/tmp/file-\xff".as_slice(), EntryKind::File),
+        (b"/tmp/file-\xfe", EntryKind::Directory),
+        (b"/tmp/plain", EntryKind::Symlink),
+    ] {
+        let path = VPath::from(std::path::PathBuf::from(OsString::from_vec(bytes.to_vec())));
+        pane_view::set_context_target_metadata(&row, &path, kind);
+        assert_eq!(
+            context_target_at(row.upcast_ref(), 10.0, 10.0),
+            Some((path.clone(), kind))
+        );
+        assert_eq!(
+            row.tooltip_text().as_deref(),
+            Some(path.to_string().as_str())
+        );
+    }
+    window.close();
 }

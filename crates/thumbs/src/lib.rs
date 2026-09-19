@@ -168,9 +168,19 @@ impl ThumbnailScheduler {
         })
     }
 
-    fn shutdown(&mut self) {
+    /// Stop accepting work; queued requests observe their cancellation tokens.
+    pub fn stop(&mut self) {
         self.requests.take();
-        for worker in self.workers.drain(..) {
+    }
+
+    #[must_use]
+    pub fn is_finished(&self) -> bool {
+        self.workers.iter().all(JoinHandle::is_finished)
+    }
+
+    fn shutdown(&mut self) {
+        self.stop();
+        for worker in self.workers.drain(..).filter(JoinHandle::is_finished) {
             let _ = worker.join();
         }
     }

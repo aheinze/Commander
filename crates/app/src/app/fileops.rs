@@ -300,21 +300,32 @@ pub(super) fn set_mode_tree(
     recursive: bool,
     cancel: &CancelToken,
 ) -> Result<usize, String> {
-    let mut pending = vec![root];
+    let mut pending = vec![(root.clone(), false)];
     let mut changed = 0_usize;
-    while let Some(path) = pending.pop() {
+    while let Some((path, visited)) = pending.pop() {
         cancel
             .check()
             .map_err(|_| "Permissions update cancelled".to_owned())?;
         let metadata = vfs.stat(&path, false).map_err(|error| error.to_string())?;
-        if recursive && metadata.kind == EntryKind::Directory {
+        if metadata.kind == EntryKind::Symlink {
+            if path == root {
+                return Err(
+                    "Select the target itself to change a symbolic link's permissions".into(),
+                );
+            }
+            continue;
+        }
+        if recursive && !visited && metadata.kind == EntryKind::Directory {
+            // Keep directory search permission until all its children are done.
+            pending.push((path.clone(), true));
             let entries = vfs
                 .read_dir(&path, cancel)
                 .map_err(|error| error.to_string())?;
             for entry in entries {
                 let entry = entry.map_err(|error| error.to_string())?;
-                pending.push(path.join_name(entry.name()));
+                pending.push((path.join_name(entry.name()), false));
             }
+            continue;
         }
         vfs.set_mode(&path, mode)
             .map_err(|error| format!("Could not change {path}: {error}"))?;

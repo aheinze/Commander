@@ -60,11 +60,14 @@ mod search_view;
 mod secure_delete;
 mod settings;
 mod shortcuts;
+mod shutdown;
 mod sidebar;
 mod terminal_view;
 mod theme;
 mod topbar;
 mod util;
+#[cfg(test)]
+mod ux_tests;
 mod widgets;
 
 use std::cell::{Cell, RefCell};
@@ -130,7 +133,7 @@ use self::context_menu::{
     pane_count_toggle_button, view_toggle_button,
 };
 use self::dialogs::{
-    connect_remote_uri, reveal_in_file_manager, show_batch_rename_dialog, show_checksum_comparison,
+    reveal_in_file_manager, show_batch_rename_dialog, show_checksum_comparison,
     show_checksum_result, show_conflict_dialog, show_create_archive_dialog,
     show_delete_workspace_dialog, show_elevated_permissions_dialog, show_image_conversion_dialog,
     show_new_directory_dialog, show_new_favorite_group_dialog, show_new_file_dialog,
@@ -142,7 +145,7 @@ use self::fileops::{apply_history, batch_rename, common_parent, set_mode_tree};
 use self::palette::{matching_commands, palette_query_matches};
 use self::pane_view::{PaneWidgets, ScrollMetrics, install_file_drop_target};
 use self::preview::{PreviewWidgets, QuickLookWidgets, git_info_for_path, measure_folder_paths};
-use self::remote::{forget_remote_password, show_remote_dialog, show_remote_error};
+use self::remote::{forget_remote_password, show_remote_dialog};
 use self::search_view::SearchWidgets;
 use self::shortcuts::{
     connect_button, install_shortcuts, palette_delete_backward, palette_insert_character,
@@ -281,7 +284,15 @@ impl PaneViewMode {
     }
 }
 
+#[derive(Default)]
+struct RetryState {
+    records: Vec<TransferRecord>,
+    ready: bool,
+    retried: bool,
+}
+
 struct OperationStatus {
+    recovery: RetryState,
     phase: JobPhase,
     kind: OperationKind,
     state: JobState,
@@ -832,6 +843,7 @@ impl PaneId {
 
 #[derive(Debug)]
 struct TabState {
+    id: u64,
     path: VPath,
     history: Vec<VPath>,
     history_index: usize,
@@ -841,7 +853,9 @@ struct TabState {
 
 impl TabState {
     fn new(path: VPath) -> Self {
+        static NEXT_TAB: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         Self {
+            id: NEXT_TAB.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             history: vec![path.clone()],
             path,
             history_index: 0,
@@ -969,7 +983,7 @@ impl PaneState {
             .tabs
             .iter()
             .filter(|path| !path.is_empty())
-            .map(|path| TabState::new(VPath::from(path.as_str())))
+            .map(|path| TabState::new(VPath::from_storage_string(path)))
             .collect();
         let tabs = if tabs.is_empty() {
             vec![TabState::new(fallback)]
@@ -1137,7 +1151,11 @@ impl PaneState {
         PaneSession {
             folders,
             locations,
-            tabs: self.tabs.iter().map(|tab| tab.path.to_string()).collect(),
+            tabs: self
+                .tabs
+                .iter()
+                .map(|tab| tab.path.to_storage_string())
+                .collect(),
             active_tab: self.active_tab,
             view_mode: self.view_mode,
             sort_key: match self.sort.key {
@@ -1159,7 +1177,7 @@ impl PaneState {
             .tabs
             .iter()
             .filter(|path| !path.is_empty())
-            .map(|path| TabState::new(VPath::from(path.as_str())))
+            .map(|path| TabState::new(VPath::from_storage_string(path)))
             .collect::<Vec<_>>();
         self.tabs = if tabs.is_empty() {
             vec![TabState::new(fallback)]
@@ -1193,7 +1211,11 @@ impl PaneState {
 impl Drop for PaneState {
     fn drop(&mut self) {
         self.cancel_work();
-        for worker in self.workers.drain(..) {
+        for worker in self
+            .workers
+            .drain(..)
+            .filter(thread::JoinHandle::is_finished)
+        {
             let _ = worker.join();
         }
     }
@@ -1221,6 +1243,7 @@ struct TerminalTabState {
 }
 
 pub struct AppModel {
+    shutdown: shutdown::State,
     live_updates: model_watch::LiveUpdates,
     devices: devices::DeviceState,
     panes: [PaneState; 2],
@@ -1249,6 +1272,8 @@ pub struct AppModel {
     workspaces: Vec<WorkspaceSession>,
     remote_uris: Vec<String>,
     remote_names: BTreeMap<String, String>,
+    remote_requests: [Option<remote::requests::Request>; 2],
+    remote_serial: u64,
     appearance: AppearanceMode,
     color_theme: ColorTheme,
     parallel_transfers: bool,
@@ -1361,6 +1386,9 @@ pub struct FinishedOperation {
 
 #[derive(Debug)]
 pub enum AppMsg {
+    RequestClose,
+    CloseDecision(bool),
+    ShutdownTick,
     DevicesChanged,
     DeviceMountRemoved(VPath),
     OpenDevice(String),
@@ -1539,7 +1567,10 @@ pub enum AppMsg {
     },
     BatchRename(Vec<(VPath, String)>),
     BatchRenameFinished(Result<Vec<(VPath, VPath)>, String>),
-    DeletePermanentConfirmed,
+    DeletePermanentConfirmed {
+        pane: PaneId,
+        sources: Vec<VPath>,
+    },
     SecureDeleteConfirmed {
         pane: PaneId,
         plan: dualpane_platform::secure_delete::SecureDeletePlan,
@@ -1680,6 +1711,16 @@ pub enum AppMsg {
         item: usize,
     },
     ConnectRemote(String),
+    ConnectRemoteInPane {
+        pane: PaneId,
+        tab: u64,
+        uri: String,
+    },
+    CancelRemote {
+        pane: PaneId,
+        id: u64,
+        timed_out: bool,
+    },
     RemoveRemote(String),
     SaveRemote {
         uri: String,
@@ -1691,18 +1732,25 @@ pub enum AppMsg {
     EditRemote(String),
     /// Drops the keyring password for the address's server, then reconnects so
     /// the credential prompt comes up fresh.
-    ForgetRemotePassword(String),
+    ForgetRemotePassword {
+        pane: PaneId,
+        tab: u64,
+        uri: String,
+    },
     ConnectRemoteWithOptions {
         connection: remote::RemoteConnection,
         replacing: Option<String>,
         name: Option<String>,
     },
     RemotePasswordForgotten {
+        pane: PaneId,
+        tab: u64,
         uri: String,
         result: Result<usize, String>,
     },
     RemoteConnected {
-        uri: String,
+        pane: PaneId,
+        id: u64,
         result: Result<VPath, String>,
     },
     SetSettings(Box<settings::SettingsDraft>),
@@ -1794,6 +1842,8 @@ pub enum AppMsg {
 }
 
 pub struct AppWidgets {
+    shutdown_status: gtk::Box,
+    remote_connecting: [remote::requests::StatusWidgets; 2],
     paned: gtk::Paned,
     workspace_paned: gtk::Paned,
     sidebar_revealer: gtk::Revealer,
@@ -1881,11 +1931,11 @@ impl AppModel {
             left: self
                 .archive_mounts
                 .display(&self.pane(PaneId::Left).active().path)
-                .to_string(),
+                .to_storage_string(),
             right: self
                 .archive_mounts
                 .display(&self.pane(PaneId::Right).active().path)
-                .to_string(),
+                .to_storage_string(),
             left_pane: Some(
                 self.archive_mounts
                     .session(self.pane(PaneId::Left).to_session()),
@@ -1947,10 +1997,13 @@ impl AppModel {
             })
             .collect::<Vec<_>>();
         items.extend(self.bookmarks.iter().filter_map(|path| {
-            let label = self.bookmark_labels.get(&path.to_string()).map_or_else(
-                || format!("Open favorite · {path}"),
-                |name| format!("Open favorite · {name} · {path}"),
-            );
+            let label = self
+                .bookmark_labels
+                .get(&path.to_storage_string())
+                .map_or_else(
+                    || format!("Open favorite · {path}"),
+                    |name| format!("Open favorite · {name} · {path}"),
+                );
             palette_query_matches(query, &[&label, "favorite bookmark open"]).then(|| PaletteItem {
                 action: PaletteAction::Navigate(path.clone()),
                 label,
@@ -1959,13 +2012,14 @@ impl AppModel {
         }));
         for group in &self.favorite_groups {
             items.extend(group.paths.iter().filter_map(|path| {
+                let display = VPath::from_storage_string(path);
                 let label = group.labels.get(path).map_or_else(
-                    || format!("Open {} favorite · {path}", group.name),
-                    |name| format!("Open {} favorite · {name} · {path}", group.name),
+                    || format!("Open {} favorite · {display}", group.name),
+                    |name| format!("Open {} favorite · {name} · {display}", group.name),
                 );
                 palette_query_matches(query, &[&label, "favorite group bookmark open"]).then(|| {
                     PaletteItem {
-                        action: PaletteAction::Navigate(VPath::from(path.as_str())),
+                        action: PaletteAction::Navigate(VPath::from_storage_string(path)),
                         label,
                         binding: String::new(),
                     }
@@ -2057,7 +2111,7 @@ impl AppModel {
             return;
         }
         for path in paths {
-            let key = path.to_string();
+            let key = path.to_storage_string();
             if let Some(color) = color {
                 self.tags.insert(key, color.to_owned());
             } else {
@@ -2071,31 +2125,18 @@ impl AppModel {
 
 impl Drop for AppModel {
     fn drop(&mut self) {
-        self.live_updates.stop();
-        self.persist_session();
-        for operation in self.operations.values() {
-            if operation.is_active() {
-                operation.control.cancel();
-            }
+        if !self.shutdown.saving {
+            self.persist_session();
         }
-        if let Some(cancel) = self.tool_cancel.take() {
-            cancel.cancel();
-        }
-        self.terminal_tabs.clear();
-        self.archive_mounts.cancel_reloads();
-        for pane in &mut self.panes {
-            pane.archive_browse.cancel();
-        }
-        for pane in &self.panes {
-            pane.git.cancel();
-            pane.thumbnail_cancel.cancel();
-        }
+        self.cancel_background_work();
         self.thumbnail_scheduler.take();
-        if let Some(bridge) = self.thumbnail_bridge.take() {
+        if let Some(bridge) = self
+            .thumbnail_bridge
+            .take()
+            .filter(thread::JoinHandle::is_finished)
+        {
             let _ = bridge.join();
         }
-        for worker in self.aux_workers.drain(..) {
-            let _ = worker.join();
-        }
+        self.reap_aux_workers();
     }
 }

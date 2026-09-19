@@ -25,6 +25,12 @@ pub fn set_mode_elevated(
     recursive: bool,
     cancel: &CancelToken,
 ) -> io::Result<()> {
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Cannot change symbolic link permissions",
+        ));
+    }
     let mut command = Command::new("pkexec");
     command.arg("/usr/bin/chmod");
     if recursive {
@@ -116,7 +122,40 @@ pub fn metadata(path: &Path, follow: bool) -> io::Result<Metadata> {
 
 /// Changes Unix permission and special mode bits without following UI-side paths.
 pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode & 0o7777))
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        // O_PATH does not require read access, so owners can repair mode-000
+        // files. Pin the inode before chmod and reject links, including a link
+        // substituted after the caller's metadata check.
+        let file = fs::openat(
+            CWD,
+            path,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        if FileType::from_raw_mode(fs::fstat(&file)?.st_mode) == FileType::Symlink {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Cannot change symbolic link permissions",
+            ));
+        }
+        fs::chmodat(
+            CWD,
+            format!("/proc/self/fd/{}", file.as_raw_fd()),
+            Mode::from_bits_truncate(mode & 0o7777),
+            AtFlags::empty(),
+        )
+        .map_err(io::Error::from)
+    }
+    #[cfg(not(target_os = "linux"))]
+    fs::chmodat(
+        CWD,
+        path,
+        Mode::from_bits_truncate(mode & 0o7777),
+        AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .map_err(io::Error::from)
 }
 
 #[cfg(target_os = "linux")]
@@ -917,5 +956,26 @@ mod tests {
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name(), native_name);
+    }
+    #[test]
+    fn chmod_rejects_links_and_can_repair_unreadable_files() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let fixture = tempdir().unwrap();
+        let target = fixture.path().join("target");
+        let link = fixture.path().join("link");
+        fs::write(&target, b"payload").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o000)).unwrap();
+        symlink(&target, &link).unwrap();
+        assert!(super::set_mode(&link, 0o777).is_err());
+        assert_eq!(
+            fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+            0
+        );
+        super::set_mode(&target, 0o600).unwrap();
+        assert_eq!(fs::read(&target).unwrap(), b"payload");
+        assert_eq!(
+            fs::metadata(target).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }

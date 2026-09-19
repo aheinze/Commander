@@ -16,17 +16,11 @@ pub(super) fn load_column(
 ) -> Result<Arc<Listing>, IndexError> {
     let task = ListingTask::spawn(vfs, ListingRequest { path, sort })?;
     loop {
-        if cancel.is_cancelled() {
-            task.cancel();
-            return Err(IndexError::Cancelled);
-        }
-        match task.receiver().recv_timeout(Duration::from_millis(50)) {
-            Ok(ListingEvent::Complete { listing, .. }) => return Ok(listing),
-            Ok(ListingEvent::Failed(error)) => return Err(error),
-            Ok(ListingEvent::Cancelled) => return Err(IndexError::Cancelled),
-            Ok(ListingEvent::Snapshot { .. }) => {}
-            Err(error) if error.is_timeout() => {}
-            Err(_) => return Err(IndexError::WorkerPanicked),
+        match task.next_event_cancellable(cancel)? {
+            ListingEvent::Complete { listing, .. } => return Ok(listing),
+            ListingEvent::Failed(error) => return Err(error),
+            ListingEvent::Cancelled => return Err(IndexError::Cancelled),
+            ListingEvent::Snapshot { .. } => {}
         }
     }
 }

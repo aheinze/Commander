@@ -31,7 +31,15 @@ pub fn move_sources(
     let mut paths = Vec::new();
     for source in sources {
         if let Some(name) = source.file_name() {
-            paths.push((source.clone(), destination.join_name(name)));
+            let target = destination.join_name(name);
+            let target = control
+                .retry_record(source)
+                .filter(|record| {
+                    record.destination.parent() == target.parent()
+                        && crate::retry::unchanged_destination(vfs, record)
+                })
+                .map_or(target, |record| record.destination.clone());
+            paths.push((source.clone(), target));
         } else {
             outcome.errors.push(JobError {
                 path: source.clone(),

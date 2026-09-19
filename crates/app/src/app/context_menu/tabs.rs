@@ -132,9 +132,6 @@ impl AppModel {
                 format,
                 password,
             } => self.start_create_archive(name, format, password, sender),
-            AppMsg::DeletePermanentConfirmed => {
-                self.start_operation(CommandId::DeletePermanent, sender)
-            }
             AppMsg::PasteInto(pane, destination) => {
                 self.paste_file_clipboard_into(pane, destination, sender)
             }

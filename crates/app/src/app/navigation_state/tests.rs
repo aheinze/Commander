@@ -231,3 +231,83 @@ fn wait(mut condition: impl FnMut() -> bool) {
         thread::sleep(Duration::from_millis(2));
     }
 }
+
+#[test]
+fn native_paths_and_selections_survive_session_save_and_restore() {
+    use std::os::unix::ffi::OsStringExt;
+    let fixture = tempfile::tempdir().unwrap();
+    let folder = fixture
+        .path()
+        .join(OsString::from_vec(b"folder-\xff".to_vec()));
+    std::fs::create_dir(&folder).unwrap();
+    let names = [
+        OsString::from_vec(b"file-\xff".to_vec()),
+        OsString::from_vec(b"file-\xfe".to_vec()),
+    ];
+    for name in &names {
+        std::fs::write(folder.join(name), b"payload").unwrap();
+    }
+    let native = VPath::from(folder);
+    let task = ListingTask::spawn(
+        Arc::new(dualpane_vfs::LocalFs),
+        ListingRequest::new(native.clone()),
+    )
+    .unwrap();
+    let listing = loop {
+        match task.next_event().unwrap() {
+            ListingEvent::Complete { listing, .. } => break listing,
+            ListingEvent::Snapshot { .. } => {}
+            event => panic!("Unexpected listing event: {event:?}"),
+        }
+    };
+    let selected_row = listing
+        .rows()
+        .position(|entry| entry.name() == names[1])
+        .unwrap() as u32;
+    for mode in [
+        PaneViewMode::List,
+        PaneViewMode::Grid,
+        PaneViewMode::Columns,
+    ] {
+        let mut pane = PaneState::from_session(
+            &PaneSession {
+                view_mode: mode,
+                ..PaneSession::default()
+            },
+            native.clone(),
+        );
+        pane.active_mut().listing = Some(Arc::clone(&listing));
+        pane.cursor_row = selected_row;
+        pane.selection.replace([SelectionKey::for_entry(
+            &native,
+            listing.row(selected_row as usize).unwrap(),
+        )]);
+        if mode == PaneViewMode::Columns {
+            pane.miller_columns[0].listing = Some(Arc::clone(&listing));
+            pane.miller_columns[0].selected_row = Some(selected_row);
+        }
+        let saved = pane.to_session();
+        // Exercise the real on-disk serializer, including encoded map keys and names.
+        let text = toml_edit::ser::to_string_pretty(&saved).unwrap();
+        let decoded: PaneSession = toml_edit::de::from_str(&text).unwrap();
+        assert_eq!(saved, decoded);
+        let mut restored = PaneState::from_session(&decoded, VPath::from("/tmp"));
+        assert_eq!(restored.active().path, native);
+        restored.active_mut().listing = Some(Arc::clone(&listing));
+        if mode == PaneViewMode::Columns {
+            assert_eq!(restored.miller_columns[0].path, native);
+            assert_eq!(
+                restored.miller_columns[0].restore_name.as_ref(),
+                Some(&names[1])
+            );
+            restored.miller_columns[0].listing = Some(Arc::clone(&listing));
+        }
+        restored.restore_selection();
+        assert_eq!(restored.cursor_row, selected_row);
+        assert_eq!(restored.selection.len(), 1);
+        assert!(restored.selection.contains(&SelectionKey::for_entry(
+            &native,
+            listing.row(selected_row as usize).unwrap()
+        )));
+    }
+}

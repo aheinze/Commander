@@ -320,3 +320,82 @@ fn crash_fixture_child() {
         .join();
     panic!("crash injection was not reached");
 }
+
+#[test]
+fn hardlink_fallback_copies_all_bytes_and_reports_real_failures() {
+    for moving in [false, true] {
+        // Unsupported backend, EOPNOTSUPP, EXDEV, GVfs EPERM, and EACCES.
+        for code in [None, Some(95), Some(18), Some(1), Some(13)] {
+            let fixture = tempfile::tempdir().unwrap();
+            let source = fixture.path().join("source");
+            let destination = fixture.path().join("destination");
+            fs::create_dir(&source).unwrap();
+            fs::create_dir(&destination).unwrap();
+            fs::write(source.join("first"), b"payload").unwrap();
+            fs::hard_link(source.join("first"), source.join("second")).unwrap();
+            let mut vfs = FaultFs::new(source.clone().into(), fixture.path().join("trash"));
+            vfs.hard_link_error = code;
+            vfs.cross_device = moving;
+            let triggered = Arc::clone(&vfs.triggered);
+            let engine = OperationEngine::new(Arc::new(vfs))
+                .with_journal_directory(fixture.path().join("journals"));
+            let sources = vec![source.clone().into()];
+            let target = destination.clone().into();
+            let summary = if moving {
+                engine.spawn_move(sources, target, ScanOptions::default(), options())
+            } else {
+                engine.spawn_copy(sources, target, ScanOptions::default(), options())
+            }
+            .join();
+            assert!(
+                triggered.load(Ordering::SeqCst),
+                "hard link was not attempted"
+            );
+            if code == Some(13) {
+                assert_eq!(summary.state, JobState::Failed, "{summary:?}");
+                assert!(
+                    summary
+                        .outcome
+                        .errors
+                        .iter()
+                        .any(|error| error.kind == JobErrorKind::PermissionDenied)
+                );
+                // Moves commit per entry. A failed name must remain at source;
+                // every removed name must have a complete, recorded destination.
+                for name in ["first", "second"] {
+                    let original = source.join(name);
+                    if original.exists() {
+                        assert_eq!(fs::read(original).unwrap(), b"payload");
+                    } else {
+                        assert!(moving);
+                        assert_eq!(
+                            fs::read(destination.join("source").join(name)).unwrap(),
+                            b"payload"
+                        );
+                        assert!(
+                            summary
+                                .outcome
+                                .transfers
+                                .iter()
+                                .any(|record| record.source.as_path() == original
+                                    && record.source_removed)
+                        );
+                    }
+                }
+                assert!(fs::read_dir(&source).unwrap().next().is_some());
+            } else {
+                assert_eq!(summary.state, JobState::Done, "{summary:?}");
+                assert_eq!(
+                    fs::read(destination.join("source/first")).unwrap(),
+                    b"payload"
+                );
+                assert_eq!(
+                    fs::read(destination.join("source/second")).unwrap(),
+                    b"payload"
+                );
+                assert_eq!(source.exists(), !moving);
+                assert_eq!(fs::read_dir(destination.join("source")).unwrap().count(), 2);
+            }
+        }
+    }
+}

@@ -603,3 +603,55 @@ fn recovery_restores_only_missing_originals() {
     );
     assert_eq!(fs::read(destination.join("file")).unwrap(), b"old");
 }
+
+#[test]
+fn recursive_permissions_skip_links_and_finish_children_before_directories() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let fixture = tempdir().unwrap();
+    let root = fixture.path().join("selected");
+    let child = root.join("nested");
+    let outside = fixture.path().join("outside.txt");
+    fs::create_dir_all(&child).unwrap();
+    fs::write(child.join("file"), b"payload").unwrap();
+    fs::write(&outside, b"untouched").unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o600)).unwrap();
+    symlink(&outside, child.join("link")).unwrap();
+    symlink(fixture.path(), child.join("directory-link")).unwrap();
+    symlink(fixture.path().join("missing"), child.join("broken-link")).unwrap();
+
+    let result = set_mode_tree(&LocalFs, path(&root), 0o400, true, &CancelToken::new());
+    let root_mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+    // Always restore directory access before assertions / fixture cleanup.
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let child_mode = fs::metadata(&child).unwrap().permissions().mode() & 0o777;
+    fs::set_permissions(&child, fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(result.unwrap(), 3);
+    assert_eq!(root_mode, 0o400);
+    assert_eq!(child_mode, 0o400);
+    assert_eq!(
+        fs::metadata(child.join("file"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o400
+    );
+    assert_eq!(
+        fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(
+        set_mode_tree(
+            &LocalFs,
+            path(child.join("link")),
+            0o777,
+            false,
+            &CancelToken::new()
+        )
+        .is_err()
+    );
+    assert_eq!(
+        fs::metadata(outside).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}

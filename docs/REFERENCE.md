@@ -138,6 +138,8 @@ view; arrows and mouse-wheel scrolling keep additional tabs reachable. Tabs with
 the same folder name show a session
 number, and tooltips include their starting folder. The terminal options menu
 contains Close all terminals; hiding the panel keeps its sessions running.
+Closing a terminal tab shuts down and reaps its shell in the background, including
+shells that ignore the initial hangup signal, without blocking the window.
 
 ## Notifications
 
@@ -289,8 +291,13 @@ updates reuse row storage and refresh only changed visible rows. Each pane has a
 most one update worker, and event overflow requests a single fresh listing.
 
 Only visible folders are monitored; reopening a hidden pane or tab refreshes its
-contents. If native monitoring cannot be established, that folder is checked every
-five seconds while visible, with monitoring retried. Idle native watches do not poll.
+contents. Remote folders and folders without native monitoring are checked every
+five seconds while visible, without repeatedly retrying unsupported monitoring.
+Idle native watches do not poll.
+
+Folder listings that make no progress for 30 seconds stop with a message to refresh
+or reconnect. Navigating away cancels the listing without waiting for a stalled
+filesystem request; late results cannot replace the newly opened folder.
 
 ## PDF previews
 
@@ -367,7 +374,18 @@ TXT, logs, CSV, generic .conf files, and extensionless README/license files rema
 plain text. Text previews read at most 512 KiB, reject NUL-containing binary samples,
 and limit highlighting work; any uncolored remainder stays readable.
 
+Saved tabs, folder view state, cursor positions, selections, favorites, recent
+folders, workspaces, and tags preserve native Unix filename bytes. Names that
+cannot be displayed as UTF-8 remain addressable through file context menus and
+after restarting Commander. Existing UTF-8 session values remain compatible.
+
 ## File-operation guarantees and limits
+
+Trash uses the local filesystem's XDG trash. On GVfs remote connections, including
+SFTP, choosing Trash offers permanent deletion instead, with the selected paths
+and an explicit confirmation. Cancel leaves the items untouched. Shift+Delete
+opens permanent deletion directly. The confirmation keeps the reviewed paths even
+if the active pane or selection changes before it is accepted.
 
 Copy, move, trash, and delete jobs appear in a slim, single-row activity strip below
 the file panes, even when the inspector is hidden. It shows a small progress bar,
@@ -375,7 +393,12 @@ status, and pause/resume/cancel controls. Transfer speed, time remaining, file p
 and errors are available in the status tooltip and Jobs menu. Finished jobs keep a
 quiet status label without a filled progress bar. Open Jobs for individual operations;
 the latest 20 completed, cancelled, or failed jobs remain available until dismissed.
-Eligible failed and cancelled jobs can be retried there. The inspector's Work tab shows the
+Eligible failed and cancelled jobs can be retried there once their final result is
+recorded. Copy/move retries rescan the sources and verify recorded destinations before
+reusing completed files, including nested files and names chosen with Keep Both.
+Changed files still use the normal conflict choices. A completed move whose source
+is already gone is skipped only when its recorded destination still matches.
+The previous attempt and its error remain in Jobs. The inspector's Work tab shows the
 same details. Progress reaching 100% can be followed by a finishing phase while the
 engine verifies and synchronizes writes. Copying, verification, and finishing have
 distinct labels. Pause and cancellation are checked between range-copy chunks and
@@ -421,7 +444,15 @@ synchronize writes. Cross-filesystem moves use the same verified copy path. Movi
 a directory into itself (including through a symbolic-link alias) is rejected.
 Skipped items and source files changed during a move are retained. Directory cleanup
 removes only scanned, successfully copied entries and never recursively deletes
-unscanned or newly created children.
+unscanned or newly created children. If a destination cannot create hard links,
+each name receives a separately verified copy of its contents. A failed multi-file
+move can leave completed entries at the destination and failed entries at the source;
+its job record identifies what completed.
+
+Recursive permission changes skip symbolic links and finish children before
+changing each directory, so removing directory access does not strand its children.
+Selecting a symbolic link itself for a permission change is rejected; select its
+target explicitly instead.
 
 Keep Both selects a distinct name for every conflict. Batch rename, undo, and redo
 stage overlapping names and refuse unexpected destination collisions. Failed
@@ -656,3 +687,20 @@ read-only; copy a nested archive out to edit it. Imports accept regular files an
 folders, not symbolic links or special files. Cut/move across archive boundaries,
 batch rename, permissions changes, and automatic external-editor write-back are
 not supported; use Copy and then Remove when moving entries.
+
+## Connection attempts and closing
+
+Each remote connection attempt shows a Connecting status and Cancel button. It
+returns to the tab and pane that started it, even after you switch tabs or panes.
+Closing that tab cancels the attempt; cancelled and superseded results are ignored.
+An attempt that has not finished within 60 seconds stops and offers connection
+options through the error notification. Retry and password-reset retry retain the
+original tab. Already mounted connections are not unmounted by cancelling an attempt.
+
+Closing Commander during a file operation, history operation, tool, or connection
+asks whether to **Keep working** (the default) or **Cancel operations and quit**.
+Shutdown cancels background work, waits for workers and the final session write,
+and stops waiting after five seconds if a filesystem does not respond. Transfer
+journals retain committed destinations and unresolved intents for Recovery; cancellation
+does not roll back completed transfers. Worker cleanup never joins unfinished threads
+on the UI thread.

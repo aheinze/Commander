@@ -44,6 +44,17 @@ impl AppModel {
             self.archive_remove(source_pane, sources, sender);
             return;
         }
+        // GVfs paths look local, but our same-filesystem XDG trash cannot be
+        // created at the shared GVfs mount root. Never silently turn Trash into
+        // permanent deletion; keep the exact reviewed targets in the response.
+        if command == CommandId::Trash
+            && sources
+                .iter()
+                .any(|path| !gio::File::for_path(path.as_path()).is_native())
+        {
+            show_permanent_delete_dialog(source_pane, sources, true, sender.input_sender().clone());
+            return;
+        }
         if matches!(command, CommandId::Copy | CommandId::Move)
             && let Some(reason) = sources.iter().find_map(|source| {
                 action_policy::transfer(
@@ -129,7 +140,10 @@ impl AppModel {
         let Some(operation) = self.operations.get(&id) else {
             return;
         };
-        if !matches!(operation.state, JobState::Cancelled | JobState::Failed) {
+        if !matches!(operation.state, JobState::Cancelled | JobState::Failed)
+            || operation.recovery.retried
+            || (matches!(operation.kind, OperationKind::Files(_)) && !operation.recovery.ready)
+        {
             return;
         }
         if matches!(operation.retry, OperationRetry::SecureDelete { .. }) {
@@ -137,7 +151,7 @@ impl AppModel {
             return;
         }
         let retry = operation.retry.clone();
-        self.operations.remove(&id);
+        let records = operation.recovery.records.clone();
         let transfer = TransferOptions {
             conflict_policy: ConflictPolicy::Ask,
             verify: true,
@@ -147,6 +161,7 @@ impl AppModel {
         let (pane, kind, handle, history) = match &retry {
             OperationRetry::SecureDelete { .. } => return,
             OperationRetry::UpdateArchive { pane, request } => {
+                self.operations.get_mut(&id).unwrap().recovery.retried = true;
                 self.start_archive_update(*pane, request.clone(), sender);
                 return;
             }
@@ -157,11 +172,12 @@ impl AppModel {
             } => (
                 *pane,
                 JobKind::Copy,
-                self.operation_engine.spawn_copy(
+                self.operation_engine.spawn_copy_retry(
                     sources.clone(),
                     destination.clone(),
                     ScanOptions::default(),
                     transfer,
+                    records.clone(),
                 ),
                 Some(HistoryEntry::Copy {
                     records: Vec::new(),
@@ -175,22 +191,33 @@ impl AppModel {
             } => (
                 *pane,
                 JobKind::Move,
-                self.operation_engine.spawn_move(
+                self.operation_engine.spawn_move_retry(
                     sources.clone(),
                     destination.clone(),
                     ScanOptions::default(),
                     transfer,
+                    records.clone(),
                 ),
                 Some(HistoryEntry::Move {
                     records: Vec::new(),
                 }),
             ),
-            OperationRetry::Trash { pane, sources } => (
-                *pane,
-                JobKind::Trash,
-                self.operation_engine.spawn_trash(sources.clone()),
-                None,
-            ),
+            OperationRetry::Trash { pane, sources } => {
+                let active = self.active_operations;
+                self.start_operation_on_paths(
+                    CommandId::Trash,
+                    *pane,
+                    sources.clone(),
+                    self.pane(pane.other()).current_directory().clone(),
+                    sender,
+                );
+                if self.active_operations > active
+                    && let Some(previous) = self.operations.get_mut(&id)
+                {
+                    previous.recovery.retried = true;
+                }
+                return;
+            }
             OperationRetry::Delete { pane, sources } => (
                 *pane,
                 JobKind::DeletePermanent,
@@ -199,11 +226,17 @@ impl AppModel {
                 None,
             ),
             OperationRetry::Archive { .. } => {
+                self.operations.get_mut(&id).unwrap().recovery.retried = true;
                 self.start_archive_operation(retry, sender);
                 return;
             }
         };
+        let next_id = handle.id();
         self.monitor_operation(pane, kind, handle, history, retry, sender);
+        self.operations.get_mut(&next_id).unwrap().recovery.records = records;
+        if let Some(previous) = self.operations.get_mut(&id) {
+            previous.recovery.retried = true;
+        }
     }
 
     pub(super) fn monitor_operation(
@@ -224,6 +257,7 @@ impl AppModel {
         self.operations.insert(
             id,
             OperationStatus {
+                recovery: RetryState::default(),
                 phase: JobPhase::Preparing,
                 kind: OperationKind::Files(kind),
                 state: JobState::Scanning,
@@ -683,8 +717,8 @@ impl AppModel {
             Ok(moves) => {
                 self.tool_cancel = None;
                 for (from, to) in &moves {
-                    if let Some(color) = self.tags.remove(&from.to_string()) {
-                        self.tags.insert(to.to_string(), color);
+                    if let Some(color) = self.tags.remove(&from.to_storage_string()) {
+                        self.tags.insert(to.to_storage_string(), color);
                     }
                 }
                 if !moves.is_empty() {
@@ -732,6 +766,14 @@ impl AppModel {
                 conflict_id,
                 conflict,
             } => {
+                if self.shutdown.started.is_some()
+                    || self
+                        .operations
+                        .get(&id)
+                        .is_none_or(|operation| !operation.can_control())
+                {
+                    return;
+                }
                 if let Some(operation) = self.operations.get_mut(&id) {
                     operation.waiting_for_conflict = true;
                 }
@@ -874,6 +916,21 @@ impl AppModel {
         self.active_operations = self.active_operations.saturating_sub(1);
         if let Some(operation) = self.operations.get_mut(&id) {
             operation.state = state;
+            operation.recovery.ready = true;
+            if matches!(state, JobState::Cancelled | JobState::Failed) {
+                let mut records = std::mem::take(&mut operation.recovery.records)
+                    .into_iter()
+                    .map(|record| (record.source.clone(), record))
+                    .collect::<HashMap<_, _>>();
+                records.extend(
+                    transfers
+                        .iter()
+                        .map(|record| (record.source.clone(), record.clone())),
+                );
+                operation.recovery.records = records.into_values().collect();
+            } else {
+                operation.recovery.records = Vec::new();
+            }
             operation.waiting_for_conflict = false;
             operation.error = errors.first().map(|error| error.message.clone());
         }
@@ -1000,8 +1057,8 @@ impl AppModel {
                             HistoryDirection::Undo => (to, from),
                             HistoryDirection::Redo => (from, to),
                         };
-                        if let Some(color) = self.tags.remove(&source.to_string()) {
-                            self.tags.insert(destination.to_string(), color);
+                        if let Some(color) = self.tags.remove(&source.to_storage_string()) {
+                            self.tags.insert(destination.to_storage_string(), color);
                         }
                     }
                     self.tags_revision = self.tags_revision.wrapping_add(1);
@@ -1011,8 +1068,8 @@ impl AppModel {
                         HistoryDirection::Undo => (to, from),
                         HistoryDirection::Redo => (from, to),
                     };
-                    if let Some(color) = self.tags.remove(&source.to_string()) {
-                        self.tags.insert(destination.to_string(), color);
+                    if let Some(color) = self.tags.remove(&source.to_storage_string()) {
+                        self.tags.insert(destination.to_storage_string(), color);
                         self.tags_revision = self.tags_revision.wrapping_add(1);
                         self.persist_session();
                     }

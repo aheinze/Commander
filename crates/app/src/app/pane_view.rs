@@ -1085,7 +1085,7 @@ impl PaneWidgets {
                     icon.set_pixel_size(13);
                     content.append(&icon);
                 }
-                if let Some(color) = self.tag_store.borrow().get(&ancestor.to_string()) {
+                if let Some(color) = self.tag_store.borrow().get(&ancestor.to_storage_string()) {
                     let indicator = tag_indicator();
                     apply_tag_indicator(&indicator, Some(color));
                     content.append(&indicator);
@@ -1908,7 +1908,11 @@ impl PaneWidgets {
                 "commander-folder-symbolic"
             });
             icon.set_pixel_size(13);
-            let tag_color = self.tag_store.borrow().get(&tab.path.to_string()).cloned();
+            let tag_color = self
+                .tag_store
+                .borrow()
+                .get(&tab.path.to_storage_string())
+                .cloned();
             apply_tab_tag(&pill, &icon, tag_color.as_deref());
             let tab_label = gtk::Label::new(Some(label));
             tab_label.set_hexpand(false);
@@ -2180,7 +2184,13 @@ pub(super) fn set_context_target_metadata(
     kind: EntryKind,
 ) {
     let widget = widget.as_ref();
-    widget.set_tooltip_text(path.as_path().to_str());
+    // The tooltip is presentation only. A file URI preserves arbitrary native
+    // bytes in the widget ID without unsafe object data or lossy reconstruction.
+    widget.set_widget_name(&format!(
+        "commander-context:{}",
+        gio::File::for_path(path.as_path()).uri()
+    ));
+    widget.set_tooltip_text(Some(&path.to_string()));
     let name = path
         .file_name()
         .map_or_else(|| path.to_string(), display_name);
@@ -2311,7 +2321,7 @@ pub(super) fn build_grid_factory(
         bind_pane_drag
             .borrow_mut()
             .bind(&card, path.clone(), entry.kind());
-        apply_tag_indicator(&tag, tag_store.borrow().get(&path.to_string()));
+        apply_tag_indicator(&tag, tag_store.borrow().get(&path.to_storage_string()));
         let fingerprint = row
             .listing
             .metadata(row.source_index)
@@ -2446,7 +2456,7 @@ pub(super) fn build_column_browser_factory(
         bind_pane_drag
             .borrow_mut()
             .bind(&container, path.clone(), entry.kind());
-        apply_tag_indicator(&tag, tag_store.borrow().get(&path.to_string()));
+        apply_tag_indicator(&tag, tag_store.borrow().get(&path.to_storage_string()));
     });
     factory.connect_unbind(move |_, item| {
         let Some(container) = item
@@ -2578,7 +2588,7 @@ pub(super) fn append_column(
         {
             crate::icons::set_file_icon(&icon, entry.kind(), entry.name());
             if let Some(tag) = icon.next_sibling().and_downcast::<gtk::Label>() {
-                apply_tag_indicator(&tag, tag_store.borrow().get(&path.to_string()));
+                apply_tag_indicator(&tag, tag_store.borrow().get(&path.to_storage_string()));
             }
         }
         let text = match kind {

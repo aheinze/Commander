@@ -178,20 +178,21 @@ impl AppModel {
     }
 
     pub(super) fn on_delete_permanent(&mut self, sender: &ComponentSender<Self>) -> Option<AppMsg> {
-        if self
-            .operation_sources(self.active_pane)
-            .iter()
-            .any(|path| self.is_archive_browse_path(path))
-        {
+        let sources = self.operation_sources(self.active_pane);
+        if sources.iter().any(|path| self.is_archive_browse_path(path)) {
             self.review_archive_removal(sender);
             return None;
         }
-        let count = self.operation_sources(self.active_pane).len();
-        if count == 0 {
+        if sources.is_empty() {
             self.pane_mut(self.active_pane).error =
                 Some("No item is available to delete".to_owned());
         } else {
-            show_permanent_delete_dialog(count, self.folder_action_input(sender));
+            show_permanent_delete_dialog(
+                self.active_pane,
+                sources,
+                false,
+                sender.input_sender().clone(),
+            );
         }
         None
     }

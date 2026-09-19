@@ -70,13 +70,19 @@ impl Drop for Watch {
 }
 
 impl Watch {
-    fn new(path: VPath, id: u64, sender: &ComponentSender<AppModel>) -> Self {
+    fn new(path: VPath, id: u64, input: &relm4::Sender<AppMsg>) -> Self {
+        let file = gio::File::for_path(path.as_path());
+        // Remote GIO backends may block while setting up a monitor, and SFTP
+        // does not support it. Keep network requests off the GTK thread.
+        if !file.is_native() {
+            return Self::poll(path, id, input);
+        }
         let timer = Rc::new(RefCell::new(None));
-        let input = sender.input_sender().clone();
-        let monitor = gio::File::for_path(path.as_path())
-            .monitor_directory(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE);
+        let monitor =
+            file.monitor_directory(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE);
         match monitor {
             Ok(monitor) => {
+                let input = input.clone();
                 let pending = Rc::new(RefCell::new(Pending::default()));
                 let source = timer.clone();
                 monitor.connect_changed(move |_, file, other, event| {
@@ -121,26 +127,29 @@ impl Watch {
             }
             Err(error) => {
                 tracing::warn!(%path, %error, "native directory monitoring unavailable; checking every five seconds");
-                // No busy-loop on unsupported mounts or unavailable directories.
-                *timer.borrow_mut() =
-                    Some(glib::timeout_add_local(Duration::from_secs(5), move || {
-                        let _ = input.send(AppMsg::FilesystemChanged {
-                            path: path.clone(),
-                            watch_id: id,
-                            batch: Pending {
-                                rescan: true,
-                                ..Pending::default()
-                            }
-                            .batch(),
-                        });
-                        glib::ControlFlow::Continue
-                    }));
-                Self {
-                    id,
-                    monitor: None,
-                    timer,
-                }
+                Self::poll(path, id, input)
             }
+        }
+    }
+
+    fn poll(path: VPath, id: u64, input: &relm4::Sender<AppMsg>) -> Self {
+        let input = input.clone();
+        let timer = glib::timeout_add_local(Duration::from_secs(5), move || {
+            let _ = input.send(AppMsg::FilesystemChanged {
+                path: path.clone(),
+                watch_id: id,
+                batch: Pending {
+                    rescan: true,
+                    ..Pending::default()
+                }
+                .batch(),
+            });
+            glib::ControlFlow::Continue
+        });
+        Self {
+            id,
+            monitor: None,
+            timer: Rc::new(RefCell::new(Some(timer))),
         }
     }
 }
@@ -263,7 +272,7 @@ impl AppModel {
                 self.live_updates.serial = self.live_updates.serial.wrapping_add(1);
                 self.live_updates.watches.insert(
                     path.clone(),
-                    Watch::new(path, self.live_updates.serial, sender),
+                    Watch::new(path, self.live_updates.serial, sender.input_sender()),
                 );
             }
         }
@@ -285,12 +294,15 @@ impl AppModel {
         {
             return;
         }
-        if batch.rescan_required {
+        if batch.rescan_required && self.live_updates.watches[&path].monitor.is_some() {
             // Reattach after a watched directory is replaced, removed, or remounted.
+            // Polling already covers unmonitored folders; do not retry unsupported
+            // monitor setup on the GTK thread on every polling tick.
             self.live_updates.watches.remove(&path);
-            self.live_updates
-                .watches
-                .insert(path.clone(), Watch::new(path.clone(), watch_id, sender));
+            self.live_updates.watches.insert(
+                path.clone(),
+                Watch::new(path.clone(), watch_id, sender.input_sender()),
+            );
         }
         if let Some(preview) = &self.preview_state.path
             && (preview == &path
@@ -929,6 +941,51 @@ mod tests {
         wait_until(|| has_file(&app, PaneId::Right, "while-hidden.txt"));
         assert!(!has_file(&app, PaneId::Left, "while-hidden.txt"));
         assert_eq!(app.model().live_updates.watches.len(), 2);
+
+        // Model an SFTP mount without native notifications. Polling must update
+        // the listing without replacing its timer or retrying monitor setup.
+        let path = VPath::from(elsewhere.as_path());
+        let watch_id = app.model().live_updates.watches[&path].id;
+        let polling = Watch::poll(path.clone(), watch_id, app.sender());
+        let timer = polling.timer.clone();
+        app.state()
+            .get_mut()
+            .model
+            .live_updates
+            .watches
+            .insert(path.clone(), polling);
+        std::fs::write(elsewhere.join("polled.txt"), "remote change").unwrap();
+        wait_until(|| has_file(&app, PaneId::Left, "polled.txt"));
+        assert!(Rc::ptr_eq(
+            &timer,
+            &app.model().live_updates.watches[&path].timer
+        ));
+        assert!(app.model().live_updates.watches[&path].monitor.is_none());
+
+        let generation = app.model().pane(PaneId::Left).generation;
+        app.state().get_mut().model.pane_mut(PaneId::Left).loading = true;
+        app.emit(AppMsg::Listing {
+            pane: PaneId::Left,
+            generation,
+            event: ListingEvent::Failed(IndexError::ListingTimeout { path }),
+        });
+        wait_until(|| {
+            let model = app.model();
+            let pane = model.pane(PaneId::Left);
+            !pane.loading
+                && pane
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.contains("Refresh"))
+        });
+        app.emit(AppMsg::Navigate(PaneId::Left, VPath::from(root.as_path())));
+        wait_until(|| {
+            let model = app.model();
+            let pane = model.pane(PaneId::Left);
+            !pane.loading
+                && pane.active().path == VPath::from(root.as_path())
+                && pane.error.is_none()
+        });
         app.widget().close();
     }
 }

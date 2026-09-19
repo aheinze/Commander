@@ -18,6 +18,9 @@ impl AppModel {
     }
 
     pub(super) fn refresh_search(&mut self, sender: &ComponentSender<Self>) {
+        if self.shutdown.started.is_some() {
+            return;
+        }
         if self.search_open
             && let Some(session) = self.search_session.clone()
         {

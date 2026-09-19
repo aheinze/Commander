@@ -244,10 +244,14 @@ impl AppModel {
             collapsed_sidebar_groups: self.collapsed_sidebar_groups.clone(),
             preview_visible: self.preview_visible,
             preview_width: self.preview_width,
-            bookmarks: self.bookmarks.iter().map(ToString::to_string).collect(),
+            bookmarks: self
+                .bookmarks
+                .iter()
+                .map(VPath::to_storage_string)
+                .collect(),
             bookmark_labels: self.bookmark_labels.clone(),
             favorite_groups: self.favorite_groups.clone(),
-            recent: self.recent.iter().map(ToString::to_string).collect(),
+            recent: self.recent.iter().map(VPath::to_storage_string).collect(),
             window_width: self.window_width,
             window_height: self.window_height,
             workspaces: self.workspaces.clone(),

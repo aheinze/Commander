@@ -7,6 +7,7 @@ mod error;
 mod job;
 pub mod journal;
 mod operations;
+mod retry;
 mod runner;
 mod scan;
 mod transfer;

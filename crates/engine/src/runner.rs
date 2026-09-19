@@ -43,6 +43,25 @@ impl OperationEngine {
         scan_options: ScanOptions,
         transfer_options: TransferOptions,
     ) -> JobHandle {
+        self.spawn_copy_retry(
+            sources,
+            destination,
+            scan_options,
+            transfer_options,
+            Vec::new(),
+        )
+    }
+
+    /// Retry a transfer, verifying recorded destinations before reusing completed files.
+    #[must_use]
+    pub fn spawn_copy_retry(
+        &self,
+        sources: Vec<VPath>,
+        destination: VPath,
+        scan_options: ScanOptions,
+        transfer_options: TransferOptions,
+        records: Vec<crate::TransferRecord>,
+    ) -> JobHandle {
         let vfs = Arc::clone(&self.vfs);
         spawn(
             JobKind::Copy,
@@ -50,6 +69,7 @@ impl OperationEngine {
             sources.clone(),
             Some(destination.clone()),
             move |id, control, events, decisions| {
+                let control = control.with_retry_records(records);
                 send_state(&events, id, JobState::Scanning);
                 let plan = scan_sources(&*vfs, &sources, scan_options, &control, |_| {})?;
                 send_state(&events, id, JobState::Running);
@@ -88,6 +108,25 @@ impl OperationEngine {
         scan_options: ScanOptions,
         transfer_options: TransferOptions,
     ) -> JobHandle {
+        self.spawn_move_retry(
+            sources,
+            destination,
+            scan_options,
+            transfer_options,
+            Vec::new(),
+        )
+    }
+
+    /// Retry a transfer, verifying recorded destinations before reusing completed files.
+    #[must_use]
+    pub fn spawn_move_retry(
+        &self,
+        sources: Vec<VPath>,
+        destination: VPath,
+        scan_options: ScanOptions,
+        transfer_options: TransferOptions,
+        records: Vec<crate::TransferRecord>,
+    ) -> JobHandle {
         let vfs = Arc::clone(&self.vfs);
         spawn(
             JobKind::Move,
@@ -95,6 +134,8 @@ impl OperationEngine {
             sources.clone(),
             Some(destination.clone()),
             move |id, control, events, decisions| {
+                let control = control.with_retry_records(records);
+                let sources = crate::retry::remaining_move_sources(&*vfs, sources, &control);
                 send_state(&events, id, JobState::Scanning);
                 let plan = scan_sources(&*vfs, &sources, scan_options, &control, |_| {})?;
                 send_state(&events, id, JobState::Running);
@@ -275,7 +316,9 @@ impl Drop for JobHandle {
     fn drop(&mut self) {
         if let Some(worker) = self.worker.take() {
             self.control.cancel();
-            let _ = worker.join();
+            if worker.is_finished() {
+                let _ = worker.join();
+            }
         }
     }
 }
@@ -438,6 +481,34 @@ mod tests {
     use crate::{
         ConflictAction, ConflictDecision, JobEvent, JobState, ScanOptions, TransferOptions,
     };
+
+    #[test]
+    fn dropping_a_job_cancels_without_waiting_for_blocked_io() {
+        let (entered, ready) = std::sync::mpsc::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        let (exited, finished) = std::sync::mpsc::channel();
+        let job = super::spawn(
+            crate::JobKind::Copy,
+            None,
+            vec![],
+            None,
+            move |_, control, _, _| {
+                entered.send(()).unwrap();
+                blocked.recv().unwrap();
+                assert!(control.cancel_token().is_cancelled());
+                exited.send(()).unwrap();
+                Err(dualpane_core::Cancelled)
+            },
+        );
+        ready.recv_timeout(Duration::from_secs(2)).unwrap();
+        let control = job.control();
+        let started = std::time::Instant::now();
+        drop(job);
+        assert!(started.elapsed() < Duration::from_millis(250));
+        assert!(control.cancel_token().is_cancelled());
+        release.send(()).unwrap();
+        finished.recv_timeout(Duration::from_secs(2)).unwrap();
+    }
 
     #[test]
     fn independent_jobs_run_concurrently_and_finish() {

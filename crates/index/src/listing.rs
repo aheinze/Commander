@@ -13,6 +13,8 @@ use crate::natural;
 
 const LATER_CHUNK_ENTRIES: usize = 2_048;
 const CHUNK_LATENCY: Duration = Duration::from_millis(16);
+const LISTING_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Debug)]
 pub(crate) struct IndexedEntry {
@@ -497,11 +499,13 @@ pub enum ListingEvent {
     Failed(IndexError),
 }
 
-/// Owned listing worker. Dropping it cancels and joins the thread.
+/// Owned listing worker. Dropping it cancels without waiting for blocked filesystem I/O.
 pub struct ListingTask {
     receiver: Receiver<ListingEvent>,
     cancel: CancelToken,
     worker: Option<JoinHandle<()>>,
+    path: VPath,
+    idle_timeout: Duration,
 }
 
 impl ListingTask {
@@ -511,8 +515,17 @@ impl ListingTask {
     ///
     /// Returns [`IndexError::Spawn`] if the worker thread cannot be created.
     pub fn spawn(vfs: Arc<dyn Vfs>, request: ListingRequest) -> Result<Self, IndexError> {
+        Self::spawn_with_timeout(vfs, request, LISTING_IDLE_TIMEOUT)
+    }
+
+    fn spawn_with_timeout(
+        vfs: Arc<dyn Vfs>,
+        request: ListingRequest,
+        idle_timeout: Duration,
+    ) -> Result<Self, IndexError> {
         let cancel = CancelToken::new();
         let worker_cancel = cancel.clone();
+        let path = request.path.clone();
         let (sender, receiver) = unbounded();
         let worker = thread::Builder::new()
             .name("dualpane-listing".to_owned())
@@ -526,6 +539,8 @@ impl ListingTask {
             receiver,
             cancel,
             worker: Some(worker),
+            path,
+            idle_timeout,
         })
     }
 
@@ -546,6 +561,46 @@ impl ListingTask {
         self.cancel.clone()
     }
 
+    /// Waits for progress, respecting cancellation and a bounded period of inactivity.
+    ///
+    /// # Errors
+    ///
+    /// Returns cancellation, a listing timeout, or a disconnected-worker failure.
+    pub fn next_event(&self) -> Result<ListingEvent, IndexError> {
+        self.next_event_cancellable(&self.cancel)
+    }
+
+    /// Like [`Self::next_event`], with an additional caller-owned cancellation token.
+    /// Each received snapshot starts a fresh inactivity budget on the next call.
+    ///
+    /// # Errors
+    ///
+    /// Returns cancellation, a listing timeout, or a disconnected-worker failure.
+    pub fn next_event_cancellable(&self, cancel: &CancelToken) -> Result<ListingEvent, IndexError> {
+        let started = Instant::now();
+        loop {
+            if self.cancel.is_cancelled() || cancel.is_cancelled() {
+                self.cancel();
+                return Err(IndexError::Cancelled);
+            }
+            let remaining = self.idle_timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                self.cancel();
+                return Err(IndexError::ListingTimeout {
+                    path: self.path.clone(),
+                });
+            }
+            match self
+                .receiver
+                .recv_timeout(remaining.min(CANCEL_POLL_INTERVAL))
+            {
+                Ok(event) => return Ok(event),
+                Err(error) if error.is_timeout() => {}
+                Err(_) => return Err(IndexError::WorkerPanicked),
+            }
+        }
+    }
+
     /// Waits for a complete listing while still consuming intermediate snapshots.
     ///
     /// # Errors
@@ -553,12 +608,11 @@ impl ListingTask {
     /// Returns the worker's error, cancellation, or a disconnected-channel failure.
     pub fn wait_complete(&self) -> Result<(Arc<Listing>, ListingTimings), IndexError> {
         loop {
-            match self.receiver.recv() {
-                Ok(ListingEvent::Complete { listing, timings }) => return Ok((listing, timings)),
-                Ok(ListingEvent::Snapshot { .. }) => {}
-                Ok(ListingEvent::Cancelled) => return Err(IndexError::Cancelled),
-                Ok(ListingEvent::Failed(error)) => return Err(error),
-                Err(_) => return Err(IndexError::WorkerPanicked),
+            match self.next_event()? {
+                ListingEvent::Complete { listing, timings } => return Ok((listing, timings)),
+                ListingEvent::Snapshot { .. } => {}
+                ListingEvent::Cancelled => return Err(IndexError::Cancelled),
+                ListingEvent::Failed(error) => return Err(error),
             }
         }
     }
@@ -582,7 +636,11 @@ impl ListingTask {
 impl Drop for ListingTask {
     fn drop(&mut self) {
         self.cancel.cancel();
-        let _ = self.join_inner();
+        if self.worker.as_ref().is_some_and(JoinHandle::is_finished) {
+            let _ = self.join_inner();
+        }
+        // A GVfs/FUSE syscall cannot be interrupted by our cancellation token.
+        // Detach unfinished workers: they own their VFS and exit when I/O returns.
     }
 }
 
@@ -761,6 +819,9 @@ fn compare_records(
 fn raw_name(name: &OsStr) -> &[u8] {
     name.as_encoded_bytes()
 }
+
+#[cfg(test)]
+mod task_tests;
 
 #[cfg(test)]
 mod tests {
@@ -959,7 +1020,7 @@ mod tests {
         assert!(first.has_same_rows_as(&second));
     }
 
-    struct SlowVfs;
+    pub(super) struct SlowVfs;
 
     impl Vfs for SlowVfs {
         fn read_dir(

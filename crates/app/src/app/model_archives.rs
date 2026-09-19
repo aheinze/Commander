@@ -44,6 +44,7 @@ impl AppModel {
         self.operations.insert(
             id,
             OperationStatus {
+                recovery: RetryState::default(),
                 phase: JobPhase::Preparing,
                 kind,
                 state: JobState::Running,

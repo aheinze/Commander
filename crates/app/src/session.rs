@@ -10,6 +10,16 @@ use thiserror::Error;
 
 use crate::commands::{KeymapOverrides, KeymapProfile};
 
+pub(crate) fn stored_name(name: &std::ffi::OsStr) -> String {
+    dualpane_core::VPath::from(Path::new(name)).to_storage_string()
+}
+
+pub(crate) fn restored_name(name: &str) -> std::ffi::OsString {
+    dualpane_core::VPath::from_storage_string(name)
+        .into_path_buf()
+        .into_os_string()
+}
+
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AppearanceMode {
@@ -345,6 +355,14 @@ impl SessionWorker {
         HistoryWriter(self.sender.clone())
     }
 
+    pub(crate) fn request_shutdown(&self) {
+        let _ = self.sender.send(SessionCommand::Shutdown);
+    }
+
+    pub(crate) fn is_finished(&self) -> bool {
+        self.worker.as_ref().is_none_or(JoinHandle::is_finished)
+    }
+
     /// Queues a complete state snapshot for an atomic worker-thread write.
     pub fn save(&self, state: SessionState) {
         let _ = self.sender.send(SessionCommand::Save(Box::new(state)));
@@ -368,7 +386,7 @@ impl SessionWorker {
 impl Drop for SessionWorker {
     fn drop(&mut self) {
         let _ = self.sender.send(SessionCommand::Shutdown);
-        if let Some(worker) = self.worker.take() {
+        if let Some(worker) = self.worker.take().filter(JoinHandle::is_finished) {
             let _ = worker.join();
         }
     }

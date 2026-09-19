@@ -21,8 +21,8 @@ An existing `PKG_CONFIG_PATH` is honored.
 The terminal rendering regression also requires a color emoji font, such as
 Noto Color Emoji (`fonts-noto-color-emoji` on Debian/Ubuntu).
 
-Every ignored app test is discovered automatically, except the FTP integration
-tests run by the separate loopback fixture below. Each native test receives its own process,
+Every ignored app test is discovered automatically, except the FTP and SFTP integration
+tests run by the separate loopback fixtures below. Each native test receives its own process,
 display, private D-Bus session without host service activation, and temporary XDG
 runtime. Configuration, cache, state, logs, and screenshots are isolated under a
 new `target/native-tests/` directory, including a private copy of the test executable
@@ -39,7 +39,9 @@ tabs, session restore, copy out, cancellation, and read-only inspector state),
 secure-delete review and cancellation, captured selections, stale-file rejection,
 and overwrite verification with disposable fixtures,
 live filesystem updates, previews, remote
-connection forms, saved remote editing, custom names and offline persistence, terminal tabs,
+connection forms, saved remote editing, custom names and offline persistence,
+cancellable connection attempts (stale results, tab/pane ownership and timeout),
+close confirmation and bounded shutdown with a stalled worker, terminal tabs,
 bundled icons, large search results, comparison
 and sync review, settings Cancel/Apply, keyboard capture and conflict reassignment, shortcut persistence,
 About diagnostics, tab folder menus (including inactive tabs, both panes, selection isolation,
@@ -165,6 +167,30 @@ D-Bus session with service activation for GVfs. It unmounts only its own FUSE
 mount. Logs and result JSON go to a new `target/ftp-tests/` directory. These two
 tests are also enabled in CI; other advertised remote protocols still need their
 own live integration coverage.
+
+The SFTP fixture uses the installed OpenSSH server and GVfs SFTP/FUSE backends:
+
+```console
+python3 -B scripts/test-sftp.py
+```
+
+It starts an unprivileged server bound to loopback with throwaway SSH keys, pins
+that server's host key, and supplies a private SSH configuration through a wrapper.
+It never reads or changes the user's SSH configuration or known-hosts file. The
+private D-Bus session and FUSE mount are cleaned up after the test. Install
+`openssh-server` and `openssh-client` alongside the GVfs dependencies above, and run
+as a normal user. Logs and result JSON are saved under `target/sftp-tests/`.
+The fixture moves a nested folder with spaces, a literal backslash, hard-linked
+files, and subsecond timestamps to SFTP, browses it, verifies a copy back to local
+storage, and permanently removes only its disposable remote folder.
+
+Workspace regressions also cover stalled listing open/enumeration, cancellation
+without joining blocked I/O, symlink-safe recursive permissions, permission removal
+in child-first order, terminal shutdown with SIGHUP ignored, and non-UTF-8 session
+paths/selections. The native suite verifies lossless right-click targets, remote
+polling, and frozen targets in permanent-delete confirmations. Its Column-view
+error/retry fixture uses denied permissions so it cannot race the watcher that
+closes a deleted branch.
 
 ## Clean native package lifecycle
 

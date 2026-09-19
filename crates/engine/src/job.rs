@@ -152,6 +152,7 @@ pub struct JobControl {
     journal: Option<Arc<crate::journal::JobJournal>>,
     phase_sink: Option<(JobId, Sender<JobEvent>)>,
     last_phase_emit: Arc<Mutex<Option<Instant>>>,
+    retry_records: Arc<std::collections::HashMap<VPath, crate::TransferRecord>>,
 }
 
 impl JobControl {
@@ -163,12 +164,31 @@ impl JobControl {
             journal: None,
             phase_sink: None,
             last_phase_emit: Arc::new(Mutex::new(None)),
+            retry_records: Arc::default(),
         }
     }
 
     #[must_use]
     pub fn cancel_token(&self) -> CancelToken {
         self.cancel.clone()
+    }
+
+    pub(crate) fn with_retry_records(mut self, records: Vec<crate::TransferRecord>) -> Self {
+        self.retry_records = Arc::new(
+            records
+                .into_iter()
+                .map(|record| (record.source.clone(), record))
+                .collect(),
+        );
+        self
+    }
+
+    pub(crate) fn retry_record(&self, source: &VPath) -> Option<&crate::TransferRecord> {
+        self.retry_records.get(source)
+    }
+
+    pub(crate) fn is_retry(&self) -> bool {
+        !self.retry_records.is_empty()
     }
 
     pub(crate) fn with_journal(mut self, journal: Arc<crate::journal::JobJournal>) -> Self {

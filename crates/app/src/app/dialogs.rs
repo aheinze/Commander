@@ -205,18 +205,6 @@ pub(super) fn show_rename_favorite_dialog(
     entry.select_region(0, -1);
 }
 
-pub(super) fn connect_remote_uri(
-    connection: super::remote::RemoteConnection,
-    sender: &ComponentSender<AppModel>,
-) {
-    let input = sender.input_sender().clone();
-    glib::spawn_future_local(async move {
-        let uri = connection.uri.clone();
-        let result = super::remote::mount_connection(connection).await;
-        let _ = input.send(AppMsg::RemoteConnected { uri, result });
-    });
-}
-
 pub(super) fn show_custom_tools_dialog(
     tools: Vec<CustomToolSession>,
     sender: &ComponentSender<AppModel>,
@@ -1123,12 +1111,32 @@ pub(super) fn show_checksum_comparison(
     dialog.present(Some(&window));
 }
 
-pub(super) fn show_permanent_delete_dialog(count: usize, input: relm4::Sender<AppMsg>) {
+pub(super) fn show_permanent_delete_dialog(
+    pane: PaneId,
+    sources: Vec<VPath>,
+    trash_unavailable: bool,
+    input: relm4::Sender<AppMsg>,
+) {
     let Some(window) = relm4::main_application().active_window() else {
         return;
     };
+    let count = sources.len();
     let item = if count == 1 { "item" } else { "items" };
-    let body = format!("Permanently delete {count} selected {item}? This action cannot be undone.");
+    let explanation = if trash_unavailable {
+        "Trash is not available for one or more selected remote items.\n\n"
+    } else {
+        ""
+    };
+    let names = sources
+        .iter()
+        .take(5)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body = format!(
+        "{explanation}Permanently delete all {count} selected {item}? This action cannot be undone.\n\n{names}{}",
+        if count > 5 { "\n…" } else { "" },
+    );
     let dialog = AlertSheet::new(Some("Delete Permanently?"), Some(&body));
     dialog.add_response("cancel", "Cancel");
     dialog.add_response("delete", "Delete");
@@ -1136,7 +1144,10 @@ pub(super) fn show_permanent_delete_dialog(count: usize, input: relm4::Sender<Ap
     dialog.set_default_response(Some("cancel"));
     dialog.set_response_appearance("delete", adw::ResponseAppearance::Destructive);
     dialog.connect_response(Some("delete"), move |_, _| {
-        let _ = input.send(AppMsg::DeletePermanentConfirmed);
+        let _ = input.send(AppMsg::DeletePermanentConfirmed {
+            pane,
+            sources: sources.clone(),
+        });
     });
     dialog.present(Some(&window));
 }

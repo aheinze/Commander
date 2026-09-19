@@ -232,8 +232,8 @@ impl AppWidgets {
                 plural(left_tabs),
                 right_tabs,
                 plural(right_tabs),
-                workspace.left,
-                workspace.right,
+                VPath::from_storage_string(&workspace.left),
+                VPath::from_storage_string(&workspace.right),
             )));
             let input = sender.input_sender().clone();
             button.connect_clicked(move |_| {
@@ -308,7 +308,10 @@ impl AppWidgets {
         recent: &[VPath],
         sender: &ComponentSender<AppModel>,
     ) {
-        let rendered = recent.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let rendered = recent
+            .iter()
+            .map(VPath::to_storage_string)
+            .collect::<Vec<_>>();
         if self.rendered_recent == rendered {
             return;
         }
@@ -563,7 +566,7 @@ impl AppWidgets {
                 section.content.append(&empty);
             }
             for (item_index, path) in group.paths.iter().enumerate() {
-                let path = VPath::from(path.as_str());
+                let path = VPath::from_storage_string(path);
                 let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
                 let label = favorite_label(&path, &group.labels);
                 let button = sidebar_button(&label, "commander-folder-symbolic");
@@ -732,7 +735,7 @@ impl AppWidgets {
 
 fn favorite_label(path: &VPath, labels: &BTreeMap<String, String>) -> String {
     labels
-        .get(&path.to_string())
+        .get(&path.to_storage_string())
         .filter(|name| !name.trim().is_empty())
         .cloned()
         .unwrap_or_else(|| {

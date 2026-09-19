@@ -631,7 +631,10 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
     app.emit(AppMsg::MoveCursorHorizontal(-1, false));
     wait_until(|| app.model().pane(PaneId::Left).miller_columns.len() == 1);
     let unavailable_row = row_for(&app.model(), 0, "Unavailable folder");
-    std::fs::remove_dir(&unavailable).unwrap();
+    // Keep the parent entry present while testing error/retry. Removing it
+    // races the live watcher, which correctly closes the deleted branch.
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&unavailable, std::fs::Permissions::from_mode(0o000)).unwrap();
     app.emit(AppMsg::MillerOpen(PaneId::Left, 0, unavailable_row));
     wait_until(|| {
         app.model()
@@ -651,18 +654,26 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
         VPath::from(unavailable.as_path()),
         360,
     ));
-    wait_until(|| app.model().pane(PaneId::Left).miller_columns[1].width == 360);
+    wait_until(|| {
+        app.model()
+            .pane(PaneId::Left)
+            .miller_columns
+            .get(1)
+            .is_some_and(|column| column.width == 360)
+    });
     snapshot(app.widget(), "miller-error");
-    std::fs::create_dir(&unavailable).unwrap();
+    std::fs::set_permissions(&unavailable, std::fs::Permissions::from_mode(0o700)).unwrap();
     app.emit(AppMsg::MillerRetry(
         PaneId::Left,
         1,
         VPath::from(unavailable.as_path()),
     ));
     wait_until(|| {
-        app.model().pane(PaneId::Left).miller_columns[1]
-            .listing
-            .is_some()
+        app.model()
+            .pane(PaneId::Left)
+            .miller_columns
+            .get(1)
+            .is_some_and(|column| column.listing.is_some())
     });
     assert_eq!(app.model().pane(PaneId::Left).miller_columns[1].width, 360);
     app.emit(AppMsg::MillerResize(

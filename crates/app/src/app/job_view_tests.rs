@@ -2,6 +2,10 @@ use super::*;
 
 fn operation(state: JobState) -> OperationStatus {
     OperationStatus {
+        recovery: RetryState {
+            ready: true,
+            ..RetryState::default()
+        },
         phase: JobPhase::Copying,
         kind: OperationKind::Files(JobKind::Copy),
         state,
@@ -471,4 +475,15 @@ fn verification_has_its_own_phase_without_copy_eta() {
     assert_eq!(view.status, "Verifying…");
     assert!(!view.detail.contains("remaining"));
     assert!(view.can_pause && view.can_cancel);
+}
+
+#[test]
+fn retry_waits_for_the_final_summary_and_cannot_be_started_twice() {
+    let mut job = operation(JobState::Failed);
+    job.recovery.ready = false;
+    assert!(!JobPresentation::new(&job).can_retry);
+    job.recovery.ready = true;
+    assert!(JobPresentation::new(&job).can_retry);
+    job.recovery.retried = true;
+    assert!(!JobPresentation::new(&job).can_retry);
 }

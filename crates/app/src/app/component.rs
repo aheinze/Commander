@@ -25,6 +25,7 @@ impl SimpleComponent for AppModel {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         crate::icons::install(&gtk::prelude::WidgetExt::display(&window));
+        let shutdown = shutdown::State::new(&window, sender.input_sender());
         let saved = init.session.unwrap_or_default();
         install_styles(saved.appearance);
         apply_color_theme(saved.color_theme, saved.appearance);
@@ -77,6 +78,8 @@ impl SimpleComponent for AppModel {
                 }
             };
         let mut model = AppModel {
+            remote_requests: [None, None],
+            remote_serial: 0,
             folder_action_target: None,
             devices: devices::DeviceState::new(),
             panes: [
@@ -103,14 +106,14 @@ impl SimpleComponent for AppModel {
             bookmarks: saved
                 .bookmarks
                 .iter()
-                .map(|path| VPath::from(path.as_str()))
+                .map(|path| VPath::from_storage_string(path))
                 .collect(),
             bookmark_labels: saved.bookmark_labels.clone(),
             favorite_groups: saved.favorite_groups.clone(),
             recent: saved
                 .recent
                 .iter()
-                .map(|path| VPath::from(path.as_str()))
+                .map(|path| VPath::from_storage_string(path))
                 .collect(),
             window_width: saved.window_width.max(720),
             window_height: saved.window_height.max(480),
@@ -205,6 +208,7 @@ impl SimpleComponent for AppModel {
             thumbnail_event: None,
             aux_workers: Vec::new(),
             live_updates: model_watch::LiveUpdates::default(),
+            shutdown,
         };
         for pane in &mut model.panes {
             pane.sort.directories_first = model.workflow.directories_first;
@@ -229,6 +233,24 @@ impl SimpleComponent for AppModel {
         let topbar = topbar::TopBarWidgets::new(&window, &sender);
         let global_search = topbar.search.clone();
         main_box.append(&topbar.root);
+        let shutdown_status = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        shutdown_status.set_visible(false);
+        shutdown_status.set_margin_start(12);
+        shutdown_status.set_margin_end(12);
+        shutdown_status.set_margin_top(8);
+        shutdown_status.set_margin_bottom(8);
+        let stopping = gtk::Spinner::new();
+        stopping.start();
+        shutdown_status.append(&stopping);
+        let stopping_label = gtk::Label::new(Some("Stopping operations and saving your session…"));
+        stopping_label.set_wrap(true);
+        shutdown_status.append(&stopping_label);
+        main_box.append(&shutdown_status);
+        let remote_connecting = [PaneId::Left, PaneId::Right].map(|pane| {
+            let status = remote::requests::StatusWidgets::new(pane, sender.input_sender());
+            main_box.append(&status.root);
+            status
+        });
 
         let palette_dialog = adw::Dialog::builder()
             .content_width(560)
@@ -564,6 +586,8 @@ impl SimpleComponent for AppModel {
         let omarchy_theme_monitor = install_omarchy_theme_monitor(&sender);
 
         let widgets = AppWidgets {
+            remote_connecting,
+            shutdown_status,
             paned,
             workspace_paned,
             sidebar_revealer,
@@ -635,7 +659,34 @@ impl SimpleComponent for AppModel {
 
     fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
         self.reap_aux_workers();
+        // Finish durable operation/history bookkeeping while closing, but never start new work.
+        if self.shutdown.started.is_some()
+            && !matches!(
+                &message,
+                AppMsg::ShutdownTick
+                    | AppMsg::RequestClose
+                    | AppMsg::CloseDecision(_)
+                    | AppMsg::OperationEvent { .. }
+                    | AppMsg::OperationFinished(_)
+                    | AppMsg::HistoryFinished { .. }
+                    | AppMsg::ArchiveReady { .. }
+                    | AppMsg::ArchiveUpdateReady { .. }
+                    | AppMsg::SecureDeleteReady { .. }
+                    | AppMsg::RenameFinished { .. }
+                    | AppMsg::BatchRenameFinished(_)
+            )
+        {
+            return;
+        }
         match message {
+            AppMsg::RequestClose => self.request_close(&sender),
+            AppMsg::CloseDecision(quit) => {
+                self.shutdown.confirming = false;
+                if quit {
+                    self.begin_shutdown(&sender);
+                }
+            }
+            AppMsg::ShutdownTick => self.shutdown_tick(&sender),
             AppMsg::RefreshPaneGit => {
                 for pane in &mut self.panes {
                     pane.git.invalidate();
@@ -902,8 +953,14 @@ impl SimpleComponent for AppModel {
             } => self.on_archive_update_ready(id, pane, source, result, &sender),
             AppMsg::BatchRename(items) => self.start_batch_rename(items, &sender),
             AppMsg::BatchRenameFinished(result) => self.on_batch_rename_finished(result, &sender),
-            AppMsg::DeletePermanentConfirmed => {
-                self.start_operation(CommandId::DeletePermanent, &sender);
+            AppMsg::DeletePermanentConfirmed { pane, sources } => {
+                self.start_operation_on_paths(
+                    CommandId::DeletePermanent,
+                    pane,
+                    sources,
+                    self.pane(pane.other()).current_directory().clone(),
+                    &sender,
+                );
             }
             AppMsg::SecureDeleteConfirmed { pane, plan } => {
                 self.start_secure_delete(pane, plan, &sender)
@@ -1155,7 +1212,7 @@ impl SimpleComponent for AppModel {
             AppMsg::RemoveBookmark(index) => {
                 if index < self.bookmarks.len() {
                     let path = self.bookmarks.remove(index);
-                    self.bookmark_labels.remove(&path.to_string());
+                    self.bookmark_labels.remove(&path.to_storage_string());
                     self.persist_session();
                 }
             }
@@ -1200,8 +1257,16 @@ impl SimpleComponent for AppModel {
             } => {
                 self.save_remote(&uri, Some(&replacing), Some(&name));
             }
-            AppMsg::RemoteConnected { uri, result } => {
-                self.on_remote_connected(uri, result, &sender)
+            AppMsg::RemoteConnected { pane, id, result } => {
+                self.on_remote_connected(pane, id, result, &sender)
+            }
+            AppMsg::CancelRemote {
+                pane,
+                id,
+                timed_out,
+            } => self.cancel_remote(pane, id, timed_out, &sender),
+            AppMsg::ConnectRemoteInPane { pane, tab, uri } => {
+                self.connect_remote_in_pane(pane, tab, uri, &sender)
             }
             AppMsg::EditRemote(uri) => {
                 show_remote_dialog(
@@ -1218,13 +1283,18 @@ impl SimpleComponent for AppModel {
             } => {
                 self.on_connect_remote_with_options(connection, replacing, name, &sender);
             }
-            AppMsg::ForgetRemotePassword(uri) => {
+            AppMsg::ForgetRemotePassword { pane, tab, uri } => {
                 let input = sender.input_sender().clone();
                 let worker = thread::Builder::new()
                     .name("dualpane-forget-password".to_owned())
                     .spawn(move || {
                         let result = forget_remote_password(&uri);
-                        let _ = input.send(AppMsg::RemotePasswordForgotten { uri, result });
+                        let _ = input.send(AppMsg::RemotePasswordForgotten {
+                            pane,
+                            tab,
+                            uri,
+                            result,
+                        });
                     });
                 match worker {
                     Ok(worker) => self.aux_workers.push(worker),
@@ -1233,12 +1303,17 @@ impl SimpleComponent for AppModel {
                     )),
                 }
             }
-            AppMsg::RemotePasswordForgotten { uri, result } => match result {
+            AppMsg::RemotePasswordForgotten {
+                pane,
+                tab,
+                uri,
+                result,
+            } => match result {
                 Ok(_) => {
                     self.push_operation_log(format!("Forgot the saved password for {uri}"));
-                    self.on_connect_remote(uri, &sender);
+                    self.connect_remote_in_pane(pane, tab, uri, &sender);
                 }
-                Err(error) => self.pane_mut(self.active_pane).error = Some(error),
+                Err(error) => self.pane_mut(pane).error = Some(error),
             },
             AppMsg::SetSettings(settings) => self.on_set_settings(*settings, &sender),
             AppMsg::SettingsSaveFailed(error) => {
@@ -1366,6 +1441,9 @@ impl SimpleComponent for AppModel {
                 result,
             } => self.on_history_finished(entry, direction, result, &sender),
         }
+        if self.shutdown.started.is_some() {
+            return;
+        }
         self.sync_directory_watches(&sender);
         self.flush_filesystem_changes(&sender);
         self.sync_pane_git(&sender);
@@ -1375,6 +1453,15 @@ impl SimpleComponent for AppModel {
     }
 
     fn update_view(&self, widgets: &mut Self::Widgets, sender: ComponentSender<Self>) {
+        widgets
+            .shutdown_status
+            .set_visible(self.shutdown.started.is_some());
+        for pane in [PaneId::Left, PaneId::Right] {
+            widgets.remote_connecting[pane.index()].render(
+                self.remote_requests[pane.index()].as_ref(),
+                &self.remote_names,
+            );
+        }
         for pane in [PaneId::Left, PaneId::Right] {
             let state = self.pane(pane);
             notifications::observe(

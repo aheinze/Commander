@@ -27,6 +27,7 @@ pub struct FaultFs {
     pub cross_device: bool,
     pub nonseekable: bool,
     pub coarse_timestamps: bool,
+    pub hard_link_error: Option<i32>,
     pub cancel: CancelToken,
     pub triggered: Arc<AtomicBool>,
 }
@@ -39,6 +40,7 @@ impl FaultFs {
             cross_device: false,
             nonseekable: false,
             coarse_timestamps: false,
+            hard_link_error: None,
             cancel: CancelToken::new(),
             triggered: Arc::new(AtomicBool::new(false)),
         }
@@ -118,6 +120,16 @@ impl Vfs for FaultFs {
         } else {
             LocalFs.rename_noreplace(a, b)
         }
+    }
+    fn hard_link(&self, _: &VPath, destination: &VPath) -> Result<()> {
+        self.triggered.store(true, Ordering::SeqCst);
+        Err(match self.hard_link_error {
+            Some(code) => error(destination, code),
+            None => VfsError::Unsupported {
+                operation: "hard link",
+                path: destination.clone(),
+            },
+        })
     }
     fn remove(&self, p: &VPath, k: EntryKind) -> Result<()> {
         LocalFs.remove(p, k)

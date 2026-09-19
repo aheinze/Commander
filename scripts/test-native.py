@@ -15,6 +15,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 # External integration tests run separately from the native GTK suite.
 EXTERNAL_TESTS = {
+    "app::remote::sftp_tests::sftp_move_browse_copy_back_and_delete_preserve_contents",
     "archive::password::tests::encrypted_archives_interoperate_with_7zip",
     "app::remote::tests::ftp_mount_uses_supplied_login_and_opens_requested_folder",
     "app::remote::tests::ftp_disconnect_preserves_destination_and_reports_failure",

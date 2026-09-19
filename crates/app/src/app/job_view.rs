@@ -172,6 +172,8 @@ impl JobPresentation {
             can_pause: operation.can_control() && !operation.waiting_for_conflict,
             can_cancel: operation.can_control(),
             can_retry: matches!(operation.state, JobState::Cancelled | JobState::Failed)
+                && !operation.recovery.retried
+                && (!matches!(operation.kind, OperationKind::Files(_)) || operation.recovery.ready)
                 && !matches!(
                     operation.kind,
                     OperationKind::ExtractArchive
@@ -333,6 +335,7 @@ impl JobRowWidgets {
         self.cancel.set_visible(!view.finished);
         self.cancel.set_sensitive(view.can_cancel);
         self.retry.set_visible(view.can_retry);
+        self.retry.set_tooltip_text(Some("Retry unfinished items"));
         self.dismiss.set_visible(view.finished);
         render_progress(&self.progress, &view);
         self.rendered = Some(view);

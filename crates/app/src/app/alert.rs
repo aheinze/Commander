@@ -100,6 +100,17 @@ impl AlertSheet {
         }
     }
 
+    pub(super) fn close_on_abort(&self, operation: &gio::MountOperation) {
+        let dialog = self.dialog.downgrade();
+        let responded = self.responded.clone();
+        operation.connect_aborted(move |_| {
+            responded.set(true);
+            if let Some(dialog) = dialog.upgrade() {
+                dialog.close();
+            }
+        });
+    }
+
     pub(super) fn add_response(&self, id: &str, label: &str) {
         self.responses.borrow_mut().push(Response {
             id: id.to_owned(),

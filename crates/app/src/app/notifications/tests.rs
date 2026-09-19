@@ -229,10 +229,13 @@ fn gtk_toasts_replace_inline_feedback_queue_safely_and_work_in_dialogs() {
     pending()[0].set_timeout(1);
     wait_until(|| pending().is_empty());
     assert!(test_messages().is_empty());
-    app.emit(AppMsg::RemoteConnected {
-        uri: "sftp://test.invalid/projects".into(),
-        result: Err("Permission denied".into()),
-    });
+    app.state().get_mut().model.begin_mount(
+        PaneId::Left,
+        "sftp://test.invalid/projects".into(),
+        std::future::ready(Err("Permission denied".into())),
+        Duration::from_secs(60),
+        app.sender(),
+    );
     wait_until(|| !pending().is_empty());
     assert!(app.widget().visible_dialog().is_none());
     let failure = pending()[0].clone();

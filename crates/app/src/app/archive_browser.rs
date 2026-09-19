@@ -173,7 +173,10 @@ impl ArchiveLocations {
     }
 
     pub(super) fn session(&self, mut session: PaneSession) -> PaneSession {
-        let display = |path: &str| self.display(&VPath::from(path)).to_string();
+        let display = |path: &str| {
+            self.display(&VPath::from_storage_string(path))
+                .to_storage_string()
+        };
         session.tabs = session.tabs.iter().map(|path| display(path)).collect();
         session.folders = session
             .folders
@@ -657,8 +660,8 @@ impl AppModel {
             .map(|(path, view)| {
                 (
                     self.archive_mounts
-                        .resolve(&VPath::from(path.as_str()))
-                        .to_string(),
+                        .resolve(&VPath::from_storage_string(&path))
+                        .to_storage_string(),
                     view,
                 )
             })
@@ -671,14 +674,14 @@ impl AppModel {
                     .iter()
                     .map(|path| {
                         self.archive_mounts
-                            .resolve(&VPath::from(path.as_str()))
-                            .to_string()
+                            .resolve(&VPath::from_storage_string(path))
+                            .to_storage_string()
                     })
                     .collect();
                 (
                     self.archive_mounts
-                        .resolve(&VPath::from(path.as_str()))
-                        .to_string(),
+                        .resolve(&VPath::from_storage_string(&path))
+                        .to_storage_string(),
                     location,
                 )
             })

@@ -23,4 +23,8 @@ pub enum IndexError {
     },
     #[error("worker thread panicked")]
     WorkerPanicked,
+    #[error(
+        "Folder {path} stopped responding. Refresh to try again, or reconnect if it is a remote folder."
+    )]
+    ListingTimeout { path: VPath },
 }

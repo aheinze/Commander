@@ -139,6 +139,9 @@ impl AppModel {
     }
 
     pub(super) fn start_listing(&mut self, pane: PaneId, sender: &ComponentSender<Self>) {
+        if self.shutdown.started.is_some() {
+            return;
+        }
         self.pane_mut(pane).archive_browse.cancel();
         let current = self.pane(pane).active().path.clone();
         let resolved = self.archive_mounts.resolve(&current);
@@ -195,8 +198,13 @@ impl AppModel {
             .name(format!("dualpane-{}-bridge", pane.label().to_lowercase()))
             .spawn(move || {
                 let mut first_publication = true;
-                while let Ok(mut event) = task.receiver().recv() {
-                    if !first_publication {
+                loop {
+                    let mut event = match task.next_event() {
+                        Ok(event) => event,
+                        Err(IndexError::Cancelled) => ListingEvent::Cancelled,
+                        Err(error) => ListingEvent::Failed(error),
+                    };
+                    if !first_publication && matches!(&event, ListingEvent::Snapshot { .. }) {
                         for newer in task.receiver().try_iter() {
                             event = newer;
                             if matches!(
@@ -232,7 +240,6 @@ impl AppModel {
                     first_publication = false;
                     let _ = presented.recv_timeout(PRESENTATION_ACK_TIMEOUT);
                 }
-                let _ = task.join();
             });
         match worker {
             Ok(worker) => self.pane_mut(pane).workers.push(worker),
@@ -240,6 +247,7 @@ impl AppModel {
                 if let Some(cancel) = self.pane_mut(pane).listing_cancel.take() {
                     cancel.cancel();
                 }
+                self.pane_mut(pane).loading = false;
                 self.pane_mut(pane).error = Some(format!("failed to bridge listing: {error}"));
             }
         }
@@ -295,13 +303,13 @@ impl AppModel {
             let previous = state.current_directory().clone();
             let selected_names = state
                 .locations
-                .get(&state.active().path.to_string())
+                .get(&state.active().path.to_storage_string())
                 .map(|location| location.selected_names.clone())
                 .unwrap_or_default();
             state.locations.insert(
-                previous.to_string(),
+                previous.to_storage_string(),
                 NavigationSession {
-                    columns: vec![previous.to_string()],
+                    columns: vec![previous.to_storage_string()],
                     selected_names,
                     horizontal_scroll: 0,
                 },
@@ -362,6 +370,12 @@ impl AppModel {
             closing_active
         };
 
+        if self.remote_requests[pane.index()]
+            .as_ref()
+            .is_some_and(|request| !self.pane(pane).tabs.iter().any(|tab| tab.id == request.tab))
+        {
+            self.remote_requests[pane.index()].take();
+        }
         if closing_active {
             self.start_listing(pane, sender);
         }
@@ -553,7 +567,7 @@ impl AppModel {
                 || {
                     self.pane(pane)
                         .folder_views
-                        .get(&path.to_string())
+                        .get(&path.to_storage_string())
                         .map_or(280, |saved| saved.column_width.clamp(220, 600))
                 },
                 |next| next.width,
@@ -598,12 +612,12 @@ impl AppModel {
                     base_listing: None,
                     restore_name: state
                         .folder_views
-                        .get(&path.to_string())
+                        .get(&path.to_storage_string())
                         .and_then(|saved| saved.cursor_name.as_ref())
-                        .map(OsString::from),
+                        .map(|name| crate::session::restored_name(name)),
                     scroll_y: state
                         .folder_views
-                        .get(&path.to_string())
+                        .get(&path.to_storage_string())
                         .map_or(0, |saved| saved.scroll_y),
                     path: path.clone(),
                     listing: None,
@@ -747,8 +761,8 @@ impl AppModel {
         self.refresh_search(sender);
         match result {
             Ok(()) => {
-                if let Some(color) = self.tags.remove(&source.to_string()) {
-                    self.tags.insert(destination.to_string(), color);
+                if let Some(color) = self.tags.remove(&source.to_storage_string()) {
+                    self.tags.insert(destination.to_storage_string(), color);
                     self.tags_revision = self.tags_revision.wrapping_add(1);
                     self.persist_session();
                 }
@@ -900,9 +914,9 @@ impl AppModel {
                 .right_pane
                 .unwrap_or_else(|| legacy_pane(&workspace.right));
             self.pane_mut(PaneId::Left)
-                .apply_session(&left, VPath::from(workspace.left.as_str()));
+                .apply_session(&left, VPath::from_storage_string(&workspace.left));
             self.pane_mut(PaneId::Right)
-                .apply_session(&right, VPath::from(workspace.right.as_str()));
+                .apply_session(&right, VPath::from_storage_string(&workspace.right));
             if let Some(dual_pane) = workspace.dual_pane {
                 self.dual_pane = dual_pane;
             }
@@ -974,7 +988,7 @@ impl AppModel {
         let path = self
             .archive_mounts
             .display(self.pane(self.active_pane).current_directory())
-            .to_string();
+            .to_storage_string();
         if let Some(group) = self.favorite_groups.get_mut(index)
             && !group.paths.contains(&path)
         {
@@ -997,7 +1011,7 @@ impl AppModel {
 
     pub(super) fn on_rename_favorite(&mut self, group: Option<usize>, path: &VPath, name: &str) {
         let name = name.trim();
-        let path_string = path.to_string();
+        let path_string = path.to_storage_string();
         let labels = if let Some(index) = group {
             let Some(group) = self
                 .favorite_groups
@@ -1036,7 +1050,7 @@ impl AppModel {
         sender: &ComponentSender<Self>,
     ) {
         if self.save_remote(&connection.uri, replacing.as_deref(), name.as_deref()) {
-            connect_remote_uri(connection, sender);
+            self.begin_remote_request(self.active_pane, connection, sender.input_sender());
         }
     }
 
@@ -1063,21 +1077,6 @@ impl AppModel {
             Err(error) => {
                 self.pane_mut(self.active_pane).error = Some(error.to_owned());
                 false
-            }
-        }
-    }
-
-    pub(super) fn on_remote_connected(
-        &mut self,
-        uri: String,
-        result: Result<VPath, String>,
-        sender: &ComponentSender<Self>,
-    ) {
-        match result {
-            Ok(path) => self.navigate(self.active_pane, path, sender),
-            Err(error) => {
-                self.push_operation_log(format!("Could not connect to {uri}: {error}"));
-                show_remote_error(uri, error, sender);
             }
         }
     }
