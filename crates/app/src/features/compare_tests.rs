@@ -5,9 +5,7 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 
-#[allow(dead_code)]
-#[path = "../../../vfs/tests/support/fault_fs.rs"]
-mod fault_fs;
+use crate::fault_fs;
 use fault_fs::{Failure, FaultFs};
 
 fn folders() -> (tempfile::TempDir, VPath, VPath) {

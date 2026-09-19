@@ -220,7 +220,8 @@ fn engine_once(
                 ..
             } => scan_elapsed = started.elapsed(),
             JobEvent::Finished { .. } => break,
-            JobEvent::Phase { .. }
+            JobEvent::SpaceChanged { .. }
+            | JobEvent::Phase { .. }
             | JobEvent::State { .. }
             | JobEvent::Progress { .. }
             | JobEvent::Conflict { .. } => {}

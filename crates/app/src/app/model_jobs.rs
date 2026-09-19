@@ -743,6 +743,7 @@ impl AppModel {
         sender: &ComponentSender<Self>,
     ) {
         match event {
+            JobEvent::SpaceChanged { .. } => {}
             JobEvent::Phase { id, phase, path } => {
                 if let Some(operation) = self.operations.get_mut(&id) {
                     operation.phase = phase;

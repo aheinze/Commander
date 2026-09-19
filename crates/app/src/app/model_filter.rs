@@ -271,9 +271,8 @@ impl AppModel {
             }
             let listing = if state.view_mode == PaneViewMode::Columns {
                 state
-                    .miller_columns
-                    .last()
-                    .and_then(|column| column.listing.clone())
+                    .active_miller_column()
+                    .and_then(|index| state.miller_columns[index].listing.clone())
             } else {
                 state.active().listing.clone()
             };
@@ -342,6 +341,7 @@ impl AppModel {
             elapsed_ms = elapsed.as_secs_f64() * 1_000.0,
             "glob selection ready"
         );
+        state.clear_restore_selection();
         for key in keys {
             if select {
                 state.selection.select_preserving_anchor(key);
@@ -365,9 +365,8 @@ impl AppModel {
         let state = self.pane(pane);
         if state.view_mode == PaneViewMode::Columns {
             state
-                .miller_columns
-                .last()
-                .and_then(|column| column.listing.as_deref())
+                .active_miller_column()
+                .and_then(|index| state.miller_columns[index].listing.as_deref())
         } else {
             state.active().listing.as_deref()
         }

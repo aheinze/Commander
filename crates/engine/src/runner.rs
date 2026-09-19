@@ -62,6 +62,26 @@ impl OperationEngine {
         transfer_options: TransferOptions,
         records: Vec<crate::TransferRecord>,
     ) -> JobHandle {
+        self.spawn_copy_with_recovery(
+            sources,
+            destination,
+            scan_options,
+            transfer_options,
+            records,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_copy_with_recovery(
+        &self,
+        sources: Vec<VPath>,
+        destination: VPath,
+        scan_options: ScanOptions,
+        transfer_options: TransferOptions,
+        records: Vec<crate::TransferRecord>,
+        recovery: Option<crate::recovery::RecoveryClaim>,
+    ) -> JobHandle {
         let vfs = Arc::clone(&self.vfs);
         spawn(
             JobKind::Copy,
@@ -69,6 +89,26 @@ impl OperationEngine {
             sources.clone(),
             Some(destination.clone()),
             move |id, control, events, decisions| {
+                // Keep the original journal exclusively locked until this attempt returns.
+                let _recovery = recovery;
+                if let Some(journal) = control.journal() {
+                    for record in &records {
+                        if let Err(error) = journal.transfer(record) {
+                            return Ok(TransferOutcome {
+                                errors: vec![error],
+                                ..TransferOutcome::default()
+                            });
+                        }
+                    }
+                    if let Some(recovery) = &_recovery
+                        && let Err(error) = recovery.link(journal)
+                    {
+                        return Ok(TransferOutcome {
+                            errors: vec![error],
+                            ..TransferOutcome::default()
+                        });
+                    }
+                }
                 let control = control.with_retry_records(records);
                 send_state(&events, id, JobState::Scanning);
                 let plan = scan_sources(&*vfs, &sources, scan_options, &control, |_| {})?;
@@ -127,6 +167,26 @@ impl OperationEngine {
         transfer_options: TransferOptions,
         records: Vec<crate::TransferRecord>,
     ) -> JobHandle {
+        self.spawn_move_with_recovery(
+            sources,
+            destination,
+            scan_options,
+            transfer_options,
+            records,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_move_with_recovery(
+        &self,
+        sources: Vec<VPath>,
+        destination: VPath,
+        scan_options: ScanOptions,
+        transfer_options: TransferOptions,
+        records: Vec<crate::TransferRecord>,
+        recovery: Option<crate::recovery::RecoveryClaim>,
+    ) -> JobHandle {
         let vfs = Arc::clone(&self.vfs);
         spawn(
             JobKind::Move,
@@ -134,6 +194,26 @@ impl OperationEngine {
             sources.clone(),
             Some(destination.clone()),
             move |id, control, events, decisions| {
+                // Keep the original journal exclusively locked until this attempt returns.
+                let _recovery = recovery;
+                if let Some(journal) = control.journal() {
+                    for record in &records {
+                        if let Err(error) = journal.transfer(record) {
+                            return Ok(TransferOutcome {
+                                errors: vec![error],
+                                ..TransferOutcome::default()
+                            });
+                        }
+                    }
+                    if let Some(recovery) = &_recovery
+                        && let Err(error) = recovery.link(journal)
+                    {
+                        return Ok(TransferOutcome {
+                            errors: vec![error],
+                            ..TransferOutcome::default()
+                        });
+                    }
+                }
                 let control = control.with_retry_records(records);
                 let sources = crate::retry::remaining_move_sources(&*vfs, sources, &control);
                 send_state(&events, id, JobState::Scanning);
@@ -165,6 +245,43 @@ impl OperationEngine {
                 Ok(outcome)
             },
         )
+    }
+
+    /// Start only after the user reviewed and claimed a saved copy/move operation.
+    pub fn spawn_recovered(
+        &self,
+        recovery: crate::recovery::RecoveryClaim,
+        transfer_options: TransferOptions,
+    ) -> Result<JobHandle, String> {
+        if self.journal_directory.is_none() {
+            return Err("Recovery retries require durable operation records.".into());
+        }
+        let record = recovery.record();
+        let sources = record.sources.clone();
+        let destination = record
+            .destination
+            .clone()
+            .ok_or("Missing retry destination")?;
+        let records = record.transfers.clone();
+        Ok(match record.kind {
+            JobKind::Copy => self.spawn_copy_with_recovery(
+                sources,
+                destination,
+                ScanOptions::default(),
+                transfer_options,
+                records,
+                Some(recovery),
+            ),
+            JobKind::Move => self.spawn_move_with_recovery(
+                sources,
+                destination,
+                ScanOptions::default(),
+                transfer_options,
+                records,
+                Some(recovery),
+            ),
+            _ => return Err("Only copy and move operations can be retried from Recovery.".into()),
+        })
     }
 
     #[must_use]
@@ -391,6 +508,13 @@ fn spawn(
             worker_control.phase(crate::JobPhase::Finishing, None);
             if let Some(journal) = journal {
                 let partial = journal.partial_outcome();
+                if state != JobState::Done {
+                    let mut transfers = crate::journal::TransferLog::default();
+                    for record in partial.transfers.into_iter().chain(outcome.transfers) {
+                        transfers.insert(record);
+                    }
+                    outcome.transfers = transfers.ordered();
+                }
                 outcome.backups = partial.backups;
                 outcome.journal_path = Some(journal.path().to_owned());
                 // Final metadata (especially directory mtimes) supersedes earlier commits.
@@ -565,7 +689,8 @@ mod tests {
                 .expect("job event")
             {
                 JobEvent::Conflict { conflict_id, .. } => break conflict_id,
-                JobEvent::Phase { .. }
+                JobEvent::SpaceChanged { .. }
+                | JobEvent::Phase { .. }
                 | JobEvent::State { .. }
                 | JobEvent::Progress { .. }
                 | JobEvent::Finished { .. } => {}
@@ -618,7 +743,8 @@ mod tests {
                 .expect("progress before timeout")
             {
                 JobEvent::Progress { progress, .. } if progress.bytes_done > 0 => break,
-                JobEvent::Phase { .. }
+                JobEvent::SpaceChanged { .. }
+                | JobEvent::Phase { .. }
                 | JobEvent::State { .. }
                 | JobEvent::Progress { .. }
                 | JobEvent::Conflict { .. }
@@ -658,7 +784,8 @@ mod tests {
                 .expect("progress before timeout")
             {
                 JobEvent::Progress { progress, .. } if progress.bytes_done > 0 => break,
-                JobEvent::Phase { .. }
+                JobEvent::SpaceChanged { .. }
+                | JobEvent::Phase { .. }
                 | JobEvent::State { .. }
                 | JobEvent::Progress { .. }
                 | JobEvent::Conflict { .. }
@@ -746,7 +873,8 @@ mod tests {
                     state: JobState::Paused,
                     ..
                 } => break,
-                JobEvent::Phase { .. }
+                JobEvent::SpaceChanged { .. }
+                | JobEvent::Phase { .. }
                 | JobEvent::State { .. }
                 | JobEvent::Progress { .. }
                 | JobEvent::Conflict { .. }

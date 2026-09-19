@@ -8,7 +8,7 @@ impl PaneState {
     /// History and existing-tab restoration use `reset_directory_view` instead.
     pub(super) fn reset_for_folder_entry(&mut self) {
         self.reset_directory_view();
-        self.restore_names.clear();
+        self.clear_restore_selection();
         self.restore_cursor = None;
         self.scroll_y = 0;
         if let Some(column) = self.miller_columns.last_mut() {
@@ -55,6 +55,7 @@ impl PaneState {
             if let Some(column) = self.miller_columns.last_mut() {
                 column.selected_row = Some(row as u32);
             }
+            self.miller_active_column = Some(listing.parent().clone());
             self.miller_focus = Some((target, entry.kind()));
             self.miller_revision = self.miller_revision.wrapping_add(1);
         }
@@ -150,6 +151,27 @@ impl PaneState {
                     .map(|column| column.path.to_storage_string())
                     .collect(),
                 selected_names,
+                selected_paths: if self.view_mode == PaneViewMode::Columns {
+                    if self.restore_paths.is_empty() {
+                        self.selected_miller_sources()
+                            .iter()
+                            .map(VPath::to_storage_string)
+                            .collect()
+                    } else {
+                        self.restore_paths
+                            .iter()
+                            .map(VPath::to_storage_string)
+                            .collect()
+                    }
+                } else {
+                    Vec::new()
+                },
+                focused_column: (self.view_mode == PaneViewMode::Columns)
+                    .then(|| {
+                        self.active_miller_column()
+                            .map(|index| self.miller_columns[index].path.to_storage_string())
+                    })
+                    .flatten(),
                 horizontal_scroll: self.miller_scroll_x,
             },
         );
@@ -188,6 +210,15 @@ impl PaneState {
             .cloned()
             .unwrap_or_default();
         self.restore_names = navigation.selected_names;
+        self.restore_paths = navigation
+            .selected_paths
+            .iter()
+            .map(|path| VPath::from_storage_string(path))
+            .collect();
+        self.miller_active_column = navigation
+            .focused_column
+            .as_deref()
+            .map(VPath::from_storage_string);
         self.miller_scroll_x = navigation.horizontal_scroll;
         self.scroll_restore_epoch = self.scroll_restore_epoch.wrapping_add(1);
         if self.view_mode == PaneViewMode::Columns {
@@ -233,6 +264,38 @@ impl PaneState {
     }
 
     pub(super) fn restore_selection(&mut self) {
+        if self.view_mode == PaneViewMode::Columns && !self.restore_paths.is_empty() {
+            // Resolve full paths only against complete listings. Unrelated loading
+            // columns need not delay restoring a selection in a ready ancestor.
+            if self.restore_paths.iter().any(|path| {
+                self.miller_columns.iter().any(|column| {
+                    path.parent().as_ref() == Some(&column.path)
+                        && column.loading
+                        && column
+                            .listing
+                            .as_ref()
+                            .is_none_or(|listing| !listing.is_complete())
+                })
+            }) {
+                return;
+            }
+            let paths: HashSet<_> = self.restore_paths.iter().collect();
+            self.selection.replace(
+                self.miller_columns
+                    .iter()
+                    .filter_map(|column| column.listing.as_ref())
+                    .flat_map(|listing| {
+                        listing
+                            .rows()
+                            .filter(|entry| {
+                                paths.contains(&listing.parent().join_name(entry.name()))
+                            })
+                            .map(|entry| SelectionKey::for_entry(listing.parent(), entry))
+                    }),
+            );
+            self.clear_restore_selection();
+            self.selection_revision = self.selection_revision.wrapping_add(1);
+        }
         let listing = if self.view_mode == PaneViewMode::Columns {
             self.miller_columns
                 .last()
@@ -262,7 +325,7 @@ impl PaneState {
                     .filter(|entry| names.contains(entry.name()))
                     .map(|entry| SelectionKey::for_entry(listing.parent(), entry)),
             );
-            self.restore_names.clear();
+            self.clear_restore_selection();
             self.selection_revision = self.selection_revision.wrapping_add(1);
         }
     }

@@ -5,7 +5,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -25,6 +25,7 @@ pub struct FaultFs {
     pub failure: Option<Failure>,
     pub trash: PathBuf,
     pub cross_device: bool,
+    pub available_bytes: Option<Arc<AtomicU64>>,
     pub nonseekable: bool,
     pub coarse_timestamps: bool,
     pub hard_link_error: Option<i32>,
@@ -38,6 +39,7 @@ impl FaultFs {
             failure: None,
             trash,
             cross_device: false,
+            available_bytes: None,
             nonseekable: false,
             coarse_timestamps: false,
             hard_link_error: None,
@@ -173,6 +175,12 @@ impl Vfs for FaultFs {
     }
     fn set_len(&self, p: &VPath, n: u64) -> Result<()> {
         LocalFs.set_len(p, n)
+    }
+    fn available_space(&self, path: &VPath) -> Result<Option<u64>> {
+        match &self.available_bytes {
+            Some(bytes) => Ok(Some(bytes.load(Ordering::SeqCst))),
+            None => LocalFs.available_space(path),
+        }
     }
     fn prepare_trash(&self, _: &VPath) -> Result<TrashLocation> {
         let files = self.trash.join("files");

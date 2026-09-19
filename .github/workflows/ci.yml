@@ -1,7 +1,14 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -13,7 +20,8 @@ env:
 jobs:
   headless:
     name: Headless workspace
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.0
@@ -34,7 +42,7 @@ jobs:
           python3 -m venv "$RUNNER_TEMP/ftp-tests"
           "$RUNNER_TEMP/ftp-tests/bin/pip" install pyftpdlib==2.1.0
           "$RUNNER_TEMP/ftp-tests/bin/python" -B scripts/test-ftp.py --output target/ftp-ci
-      - name: Check real SFTP move, browse, copy and deletion
+      - name: Check SFTP transfers, stalls, cancellation and reconnect recovery
         run: python3 -B scripts/test-sftp.py --output target/sftp-ci
       - name: Upload native regression logs and screenshots
         if: always()
@@ -63,7 +71,8 @@ jobs:
 
   msrv:
     name: MSRV 1.96
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.96.0

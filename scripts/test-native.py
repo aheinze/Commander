@@ -97,7 +97,7 @@ def main():
     shutil.copy2(artifacts[0], binary)
     listing = subprocess.check_output([binary, "--list", "--ignored", "--format", "terse"], text=True)
     tests = [line.removesuffix(": test") for line in listing.splitlines() if line.endswith(": test")]
-    tests = [test for test in tests if test not in EXTERNAL_TESTS and args.filter in test]
+    tests = [test for test in tests if test not in EXTERNAL_TESTS and not test.startswith("app::remote::sftp_tests::") and args.filter in test]
     if not tests:
         parser.error("No native tests matched; refusing an empty successful run")
     results = []

@@ -14,6 +14,11 @@ python3 scripts/test-native.py --backend wayland
 cargo build --release --package dualpane-app --locked
 ```
 
+The CI workflow runs automatically on pushes to `main` and pull requests, and can
+also be started manually. It cancels superseded runs on the same branch and retains
+native regression artifacts on failure. Both jobs use Ubuntu 24.04; the headless
+job runs the checks below plus real FTP/SFTP fixtures and performance gates.
+
 The native runner requires Python 3, `dbus-run-session`, GNU `timeout`, and Mutter
 with headless Wayland support. `--backend x11` instead uses Xvfb, `xvfb-run`, and
 `xauth`. Build dependencies are the same GTK/libadwaita dependencies as the app.
@@ -32,7 +37,11 @@ An empty test selection fails. `results.json` records each exit status and durat
 CI uploads these artifacts even when a regression fails.
 
 The native suite checks selection/reveal in all three views, Favorites labels,
-activity controls, archive round trips, archive panel edits (copy/paste/drop, folder trees, rename, removal, conflicts,
+Miller keyboard targeting in ancestor columns, filename type-ahead and repeated
+matches, live refresh, filtering, selection commands, and focus/selection restoration
+across tabs (including empty/error columns and Left/Up navigation),
+activity controls (including low-space recheck, override, and cancellation),
+reviewed Recovery retries after restart (including stale-record rejection), archive round trips, archive panel edits (copy/paste/drop, folder trees, rename, removal, conflicts,
 recovery copies, undo/redo across restarts, recovery restoration, shared action
 availability, and tab refresh), archive folder browsing (nested archives,
 tabs, session restore, copy out, cancellation, and read-only inspector state),
@@ -176,13 +185,36 @@ python3 -B scripts/test-sftp.py
 
 It starts an unprivileged server bound to loopback with throwaway SSH keys, pins
 that server's host key, and supplies a private SSH configuration through a wrapper.
-It never reads or changes the user's SSH configuration or known-hosts file. The
-private D-Bus session and FUSE mount are cleaned up after the test. Install
+The default loopback mode never reads or changes the user's SSH configuration or
+known-hosts file. Each scenario uses a private D-Bus session and FUSE mount, cleaned
+up afterward. Install
 `openssh-server` and `openssh-client` alongside the GVfs dependencies above, and run
 as a normal user. Logs and result JSON are saved under `target/sftp-tests/`.
 The fixture moves a nested folder with spaces, a literal backslash, hard-linked
 files, and subsecond timestamps to SFTP, browses it, verifies a copy back to local
 storage, and permanently removes only its disposable remote folder.
+A private loopback proxy also drops connections during uploads and downloads,
+then reconnects and retries from durable Recovery records. These checks preserve
+unfinished move sources and existing destination contents, and reuse completed
+transfers even when GVfs changes inode IDs after remounting. Further scenarios
+stall directory I/O through the full 30-second listing timeout, cancel a blocked
+listing without joining its worker, and cancel a stalled upload without publishing
+partial contents once I/O returns. Kernel filesystem calls themselves are not
+forcibly interrupted. Use `--filter disconnect` to run only reconnect scenarios.
+All five loopback scenarios run in CI.
+
+To check an actual server using an existing key/agent and verified host key:
+
+```console
+python3 -B scripts/test-sftp.py --remote user@host --browse /absolute/remote/folder
+```
+
+This explicit mode uses the user's SSH configuration. It creates a new
+`/tmp/commander-sftp-*` directory on that server for the round trip and removes
+that exact directory afterward. The optional `--browse` directory is listed
+read-only. Connection faults are never injected into real-server traffic. Check
+the cleanup message and test logs; this mode requires permission to create a
+temporary directory on the server.
 
 Workspace regressions also cover stalled listing open/enumeration, cancellation
 without joining blocked I/O, symlink-safe recursive permissions, permission removal

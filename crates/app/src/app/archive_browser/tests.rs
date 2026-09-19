@@ -57,11 +57,21 @@ fn supported_archives_open_nested_folders_reuse_snapshots_and_keep_visible_paths
             root.to_string(),
             NavigationSession {
                 columns: vec![root.to_string(), opened.location.to_string()],
+                selected_paths: vec![opened.location.to_storage_string()],
+                focused_column: Some(root.to_storage_string()),
                 ..NavigationSession::default()
             },
         );
         let saved = paths.session(session);
         assert_eq!(saved.tabs, vec![target.to_string()]);
+        assert_eq!(
+            saved.locations[&source.to_string_lossy().to_string()].selected_paths,
+            vec![target.to_storage_string()]
+        );
+        assert_eq!(
+            saved.locations[&source.to_string_lossy().to_string()].focused_column,
+            Some(VPath::from(source.as_path()).to_storage_string())
+        );
         assert_eq!(
             saved.locations[&source.to_string_lossy().to_string()].columns,
             vec![source.to_string_lossy().to_string(), target.to_string()]

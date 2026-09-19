@@ -158,6 +158,9 @@ impl AppModel {
         if generation != state.miller_generation || state.view_mode != PaneViewMode::Columns {
             return;
         }
+        let opening_column = state
+            .active_miller_column()
+            .filter(|&index| state.miller_columns[index].listing.is_none());
         state.miller_cancel = None;
         state.loading = false;
         state.filtering = false;
@@ -223,13 +226,19 @@ impl AppModel {
                 }
             }
         }
-        state.miller_focus = state.miller_columns.last().and_then(|column| {
-            let entry = column
+        // An empty newly opened column has no row to focus: keep keyboard
+        // navigation on its parent, where GTK still shows the focus outline.
+        if let Some(index) = state.active_miller_column()
+            && opening_column == Some(index)
+            && index > 0
+            && state.miller_columns[index]
                 .listing
-                .as_ref()?
-                .row(column.selected_row? as usize)?;
-            Some((column.path.join_name(entry.name()), entry.kind()))
-        });
+                .as_ref()
+                .is_some_and(|listing| listing.is_empty())
+        {
+            state.miller_active_column = Some(state.miller_columns[index - 1].path.clone());
+        }
+        state.reconcile_miller_focus();
         state.retain_miller_selection();
         if let Some(root) = state.miller_columns.first() {
             let base = root.base_listing.clone();

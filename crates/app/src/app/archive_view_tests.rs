@@ -1,11 +1,16 @@
 use super::*;
 use relm4::{Component, ComponentController};
 
+#[track_caller]
 fn wait_until(mut ready: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(15);
     let context = glib::MainContext::default();
     while !ready() {
-        assert!(Instant::now() < deadline, "archive UI timed out");
+        assert!(
+            Instant::now() < deadline,
+            "archive UI timed out at {}",
+            std::panic::Location::caller()
+        );
         while context.pending() {
             context.iteration(false);
         }
@@ -138,7 +143,8 @@ fn gtk_archive_selected_folder_beside_it_and_round_trip_all_contents() {
     std::fs::remove_file(marker).unwrap();
     wait_until(|| !marker_visible());
 
-    // Keyboard movement and marking explicitly enter the child column.
+    // Opening the folder initially focuses its child. After focusing an ancestor,
+    // Right explicitly enters that child before its keyboard commands apply.
     app.emit(AppMsg::MoveCursorTo(CursorTarget::Last, false));
     wait_until(|| {
         app.model().operation_sources(PaneId::Left)
@@ -151,6 +157,12 @@ fn gtk_archive_selected_folder_beside_it_and_round_trip_all_contents() {
     wait_until(|| {
         app.model().operation_sources(PaneId::Left) == vec![VPath::from(source.as_path())]
     });
+    assert_eq!(
+        app.model().pane(PaneId::Left).active_miller_column(),
+        Some(0)
+    );
+    app.emit(AppMsg::MoveCursorHorizontal(1, false));
+    wait_until(|| app.model().pane(PaneId::Left).active_miller_column() == Some(1));
     app.emit(AppMsg::ToggleCursor);
     wait_until(|| {
         app.model().operation_sources(PaneId::Left)
@@ -164,6 +176,8 @@ fn gtk_archive_selected_folder_beside_it_and_round_trip_all_contents() {
         app.model().operation_sources(PaneId::Left) == vec![VPath::from(source.as_path())]
     });
 
+    app.emit(AppMsg::MoveCursorHorizontal(1, false));
+    wait_until(|| app.model().pane(PaneId::Left).active_miller_column() == Some(1));
     app.emit(AppMsg::InvertSelectionActive);
     wait_until(|| app.model().pane(PaneId::Left).selection.len() == 50);
     assert!(

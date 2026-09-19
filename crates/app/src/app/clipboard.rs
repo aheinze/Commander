@@ -186,6 +186,7 @@ mod tests {
             metadata: LocalFs.stat(&one, false).unwrap(),
             created: true,
             source_removed: true,
+            fingerprint: None,
         };
         assert_eq!(
             remaining_cut_sources(&[one.clone(), two.clone()], &[record]),

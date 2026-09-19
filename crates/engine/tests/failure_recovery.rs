@@ -150,17 +150,20 @@ fn coarse_timestamps_do_not_hide_corrupt_copies_or_changed_move_sources() {
 }
 
 #[test]
-fn verification_still_detects_a_subsecond_source_timestamp_change() {
-    let fixture = tempfile::tempdir().unwrap();
-    let source = fixture.path().join("source.txt");
-    let destination = fixture.path().join("copy.txt");
-    fs::write(&source, b"unchanged bytes").unwrap();
-    fs::copy(&source, &destination).unwrap();
-    let mut vfs = FaultFs::new(source.clone().into(), fixture.path().join("trash"));
-    vfs.failure = Some(Failure::SourceChanged);
-    let error = verify_copy(&vfs, &source.into(), &destination.into()).unwrap_err();
-    assert!(vfs.triggered.load(Ordering::SeqCst));
-    assert_eq!(error.operation, "verify copy");
+fn verification_detects_changes_to_either_file_during_the_read() {
+    for change_source in [true, false] {
+        let fixture = tempfile::tempdir().unwrap();
+        let source = fixture.path().join("source.txt");
+        let destination = fixture.path().join("copy.txt");
+        fs::write(&source, b"unchanged bytes").unwrap();
+        fs::copy(&source, &destination).unwrap();
+        let changed = if change_source { &source } else { &destination };
+        let mut vfs = FaultFs::new(changed.clone().into(), fixture.path().join("trash"));
+        vfs.failure = Some(Failure::SourceChanged);
+        let error = verify_copy(&vfs, &source.into(), &destination.into()).unwrap_err();
+        assert!(vfs.triggered.load(Ordering::SeqCst));
+        assert_eq!(error.operation, "verify copy");
+    }
 }
 
 #[test]

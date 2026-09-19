@@ -81,6 +81,10 @@ pub struct FolderViewSession {
 pub struct NavigationSession {
     pub columns: Vec<String>,
     pub selected_names: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub selected_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub focused_column: Option<String>,
     pub horizontal_scroll: u32,
 }
 

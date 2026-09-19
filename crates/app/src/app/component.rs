@@ -163,6 +163,7 @@ impl SimpleComponent for AppModel {
             redo_stack: init.history.redo,
             history_busy: false,
             recovery_records: Vec::new(),
+            recovery_retry: recovery::retry::State::default(),
             recovery_errors: init.history_warning.into_iter().collect(),
             clipboard_cut_jobs: BTreeMap::new(),
             clipboard_provider: None,
@@ -701,9 +702,9 @@ impl SimpleComponent for AppModel {
                 errors,
                 show,
             } => {
-                let interrupted = records
-                    .iter()
-                    .any(|record| record.state.is_none() && !record.reviewed);
+                let interrupted = records.iter().any(|record| {
+                    record.state.is_none() && !record.reviewed && record.retry.is_none()
+                });
                 self.recovery_records = records;
                 self.recovery_errors.extend(errors);
                 if show || interrupted {
@@ -718,6 +719,16 @@ impl SimpleComponent for AppModel {
             }
             AppMsg::RestoreMissingOriginals(path) => self.restore_missing_originals(path, &sender),
             AppMsg::ReviewRecovery(path) => self.review_recovery(path, &sender),
+            AppMsg::PrepareRecoveryRetry(path) => self.prepare_recovery_retry(path, &sender),
+            AppMsg::RecoveryRetryPrepared { id, result } => {
+                self.on_recovery_retry_prepared(id, result, &sender)
+            }
+            AppMsg::RecoveryRetryDecision { id, confirmed } => {
+                self.recovery_retry_decision(id, confirmed, &sender)
+            }
+            AppMsg::RecoveryRetryClaimed { id, result } => {
+                self.on_recovery_retry_claimed(id, result, &sender)
+            }
             AppMsg::RecoveryFinished(result) => {
                 match &result {
                     Ok(message) => notifications::success(message),
@@ -1058,6 +1069,8 @@ impl SimpleComponent for AppModel {
                 if self.pane(pane).view_mode == PaneViewMode::Columns
                     && self.pane(pane).miller_columns.len() > 1
                 {
+                    let last = self.pane(pane).miller_columns.len() - 1;
+                    self.pane_mut(pane).focus_miller_column(last);
                     self.move_miller_left(pane, &sender);
                 } else if let Some(parent) =
                     self.archive_mounts.parent(&self.pane(pane).active().path)
@@ -1077,6 +1090,19 @@ impl SimpleComponent for AppModel {
             AppMsg::OpenRow(pane, row) => self.open_row(pane, row, &sender),
             AppMsg::MillerOpen(pane, column, row) => {
                 self.open_miller_row(pane, column, row, &sender);
+            }
+            AppMsg::MillerFocusColumn(pane, path) => {
+                let state = self.pane_mut(pane);
+                if state.view_mode == PaneViewMode::Columns
+                    && state.miller_active_column.as_ref() != Some(&path)
+                    && let Some(index) = state
+                        .miller_columns
+                        .iter()
+                        .position(|column| column.path == path)
+                {
+                    state.focus_miller_column(index);
+                    state.miller_revision = state.miller_revision.wrapping_add(1);
+                }
             }
             AppMsg::MillerSelectionChanged {
                 pane,
@@ -1434,6 +1460,13 @@ impl SimpleComponent for AppModel {
                 }
             }
             AppMsg::TogglePauseOperation(id) => self.on_toggle_pause_operation(id),
+            AppMsg::RecheckOperationSpace(id) => {
+                if let Some(operation) = self.operations.get(&id)
+                    && operation.can_control()
+                {
+                    operation.control.recheck_space();
+                }
+            }
             AppMsg::OperationFinished(finished) => self.on_operation_finished(finished, &sender),
             AppMsg::HistoryFinished {
                 entry,

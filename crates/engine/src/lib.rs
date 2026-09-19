@@ -7,6 +7,7 @@ mod error;
 mod job;
 pub mod journal;
 mod operations;
+pub mod recovery;
 mod retry;
 mod runner;
 mod scan;
@@ -20,7 +21,7 @@ pub use dualpane_core::{CancelToken, Cancelled};
 pub use error::{JobError, JobErrorKind};
 pub use job::{
     ConflictId, ConflictResponse, JobControl, JobEvent, JobId, JobKind, JobPhase, JobProgress,
-    JobState, JobSummary, ProgressEmitter,
+    JobState, JobSummary, ProgressEmitter, SpaceIssue,
 };
 pub use operations::{delete_permanently, move_paths, move_sources, trash_sources};
 pub use runner::{JobHandle, OperationEngine};

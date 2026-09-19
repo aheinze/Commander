@@ -102,3 +102,8 @@ fn setup_tracing(profile_startup: bool) -> Result<(), Box<dyn Error>> {
         .try_init()?;
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../../vfs/tests/support/fault_fs.rs"]
+mod fault_fs;

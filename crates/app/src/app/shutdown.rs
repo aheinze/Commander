@@ -74,6 +74,7 @@ impl AppModel {
 
     pub(super) fn cancel_background_work(&mut self) {
         self.live_updates.stop();
+        self.recovery_retry = recovery::retry::State::default();
         for operation in self.operations.values() {
             if operation.is_active() {
                 operation.control.cancel();

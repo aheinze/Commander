@@ -446,9 +446,16 @@ fn snapshot(widget: &impl IsA<gtk::Widget>, name: &str) {
         widget.width() > 0 && widget.height() > 0,
         "{name} is allocated"
     );
+    // A live AppModel can queue a fresh allocation between frames. Capture the
+    // paintable's rendered frame instead of snapshotting a dirty widget tree.
+    let paintable = gtk::WidgetPaintable::new(Some(widget));
+    drain_frames();
     let snapshot = gtk::Snapshot::new();
-    let parent = widget.parent().expect("snapshot a child widget");
-    parent.snapshot_child(widget, &snapshot);
+    paintable.snapshot(
+        &snapshot,
+        f64::from(widget.width()),
+        f64::from(widget.height()),
+    );
     let node = snapshot
         .to_node()
         .expect("visible widget has a render node");
@@ -457,7 +464,7 @@ fn snapshot(widget: &impl IsA<gtk::Widget>, name: &str) {
         .unwrap()
         .renderer()
         .unwrap()
-        .render_texture(&node, widget.compute_bounds(&parent).as_ref());
+        .render_texture(&node, None);
     texture
         .save_to_png(std::path::Path::new(&directory).join(format!("{name}.png")))
         .unwrap();
@@ -486,4 +493,96 @@ fn retry_waits_for_the_final_summary_and_cannot_be_started_twice() {
     assert!(JobPresentation::new(&job).can_retry);
     job.recovery.retried = true;
     assert!(!JobPresentation::new(&job).can_retry);
+}
+
+use crate::fault_fs;
+
+#[test]
+#[ignore = "requires an isolated GTK session; run in the native suite"]
+fn gtk_low_space_explains_pause_and_supports_recheck_override_and_cancel() {
+    use crate::app::ux_tests::{launch, wait};
+    use relm4::ComponentController;
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+    };
+    let fixture = tempfile::tempdir().unwrap();
+    let destination = fixture.path().join("destination");
+    fs::create_dir(&destination).unwrap();
+    let free = Arc::new(AtomicU64::new(0));
+    let mut vfs = fault_fs::FaultFs::new(
+        fixture.path().join("unused").into(),
+        fixture.path().join("trash"),
+    );
+    vfs.available_bytes = Some(free.clone());
+    let app = launch(fixture.path());
+    app.state().get_mut().model.operation_engine = OperationEngine::new(Arc::new(vfs));
+    for action in ["recheck", "override", "cancel"] {
+        let source = fixture.path().join(action);
+        fs::write(&source, vec![7; 8192]).unwrap();
+        free.store(0, Ordering::SeqCst);
+        app.emit(AppMsg::DropFiles {
+            sources: vec![source.into()],
+            destination: destination.clone().into(),
+            action: FileDropAction::Copy,
+        });
+        wait(|| {
+            app.model()
+                .operations
+                .values()
+                .any(|job| job.control.space_issue().is_some())
+        });
+        let id = *app.model().operations.keys().next_back().unwrap();
+        wait(|| app.widgets().jobs.pause.label().as_deref() == Some("Resume anyway"));
+        let state = app.model();
+        let view = JobPresentation::new(&state.operations[&id]);
+        assert_eq!(view.status, "Not enough space");
+        assert!(view.detail.contains("needed") && view.detail.contains("available"));
+        assert!(view.paused && view.can_cancel && view.can_pause);
+        drop(state);
+        assert!(app.widgets().jobs.recheck.is_visible());
+        assert!(!destination.join(action).exists());
+        match action {
+            "recheck" => {
+                app.widgets().jobs.menu.popup();
+                drain_frames();
+                let activity = app.widgets().jobs.root.clone();
+                let list = app.widgets().jobs.list.root.clone();
+                snapshot(&activity, "low-space-activity");
+                snapshot(&list, "low-space-jobs");
+                app.widgets().jobs.menu.popdown();
+                free.store(1024, Ordering::SeqCst);
+                app.widgets().jobs.recheck.emit_clicked();
+                wait(|| {
+                    app.model().operations[&id]
+                        .control
+                        .space_issue()
+                        .is_some_and(|space| !space.checking && space.available_bytes == Some(1024))
+                });
+                assert_eq!(app.model().active_operations, 1);
+                assert!(!destination.join(action).exists());
+                free.store(8192, Ordering::SeqCst);
+                app.widgets().jobs.recheck.emit_clicked();
+            }
+            "override" => app.widgets().jobs.pause.emit_clicked(),
+            _ => app.widgets().jobs.cancel.emit_clicked(),
+        }
+        wait(|| app.model().active_operations == 0);
+        assert_eq!(
+            app.model().operations[&id].state,
+            if action == "cancel" {
+                JobState::Cancelled
+            } else {
+                JobState::Done
+            }
+        );
+        if action == "cancel" {
+            assert!(!destination.join(action).exists());
+        } else {
+            assert_eq!(fs::read(destination.join(action)).unwrap(), vec![7; 8192]);
+        }
+        assert!(!app.widgets().jobs.recheck.is_visible());
+    }
+    app.widget().close();
+    wait(|| !app.widget().is_visible());
 }

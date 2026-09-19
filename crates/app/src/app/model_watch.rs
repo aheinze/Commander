@@ -568,13 +568,7 @@ impl AppModel {
                 }
             }
             state.retain_miller_selection();
-            state.miller_focus = state.miller_columns.last().and_then(|column| {
-                let entry = column
-                    .listing
-                    .as_ref()?
-                    .row(column.selected_row? as usize)?;
-                Some((column.path.join_name(entry.name()), entry.kind()))
-            });
+            state.reconcile_miller_focus();
             if let Some(root) = state.miller_columns.first() {
                 let base = root.base_listing.clone();
                 let visible = root.listing.clone();

@@ -1,6 +1,8 @@
 use super::*;
 use relm4::{Component, ComponentController};
 
+mod focus;
+
 fn listing(path: &std::path::Path) -> Arc<Listing> {
     ListingTask::spawn(
         Arc::new(LocalFs),
@@ -1215,11 +1217,18 @@ fn wait_until(mut predicate: impl FnMut() -> bool) {
     }
 }
 
+#[track_caller]
 fn drain_frames() {
     let context = glib::MainContext::default();
     let until = Instant::now() + Duration::from_millis(100);
+    let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < until {
         while context.pending() {
+            assert!(
+                Instant::now() < deadline,
+                "GTK event loop did not settle at {}",
+                std::panic::Location::caller()
+            );
             context.iteration(false);
         }
         thread::sleep(Duration::from_millis(5));
@@ -1292,7 +1301,10 @@ fn navigation_session_restores_branch_widths_and_folder_preferences() {
     assert_eq!(restored.restore_names, vec!["note"]);
     assert!(restored.show_hidden);
     assert_eq!(restored.sort.direction, SortDirection::Descending);
-    restored.miller_columns[1].listing = Some(Arc::clone(listing));
+    for column in &mut restored.miller_columns {
+        column.listing = Some(self::listing(column.path.as_path()));
+        column.loading = false;
+    }
     restored.restore_selection();
     assert!(restored.selection.contains(&SelectionKey::for_entry(
         listing.parent(),

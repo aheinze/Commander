@@ -1,3 +1,4 @@
+pub(super) mod retry;
 use super::*;
 use dualpane_engine::journal::{RecoveryRecord, read_journal, scan_journals};
 
@@ -87,6 +88,9 @@ fn report(record: &RecoveryRecord) -> String {
             intent.target
         ));
     }
+    if let Some(retry) = &record.retry {
+        lines.push(format!("Retried in a newer operation: {}", retry.display()));
+    }
     lines.extend(record.errors.iter().take(12).cloned());
     lines.push(format!("Full operation record: {}", record.path.display()));
     if record.archive.is_some() {
@@ -158,6 +162,11 @@ impl AppModel {
             button.connect_clicked(move |button| {
                 let detail = AlertSheet::new(Some("Operation details"), Some(&report(&record)));
                 detail.add_response("close", "Close");
+                detail.set_default_response(Some("close"));
+                detail.set_close_response("close");
+                if dualpane_engine::recovery::can_retry(&record) {
+                    detail.add_response("retry", "Retry remaining items…");
+                }
                 if record.archive.is_some() {
                     detail.add_response("archive", "Restore archive");
                     detail.set_response_appearance("archive", adw::ResponseAppearance::Destructive);
@@ -171,6 +180,9 @@ impl AppModel {
                 let path = record.path.clone();
                 let input = input.clone();
                 detail.connect_response(None, move |_, response| match response {
+                    "retry" => {
+                        let _ = input.send(AppMsg::PrepareRecoveryRetry(path.clone()));
+                    }
                     "archive" => {
                         let _ = input.send(AppMsg::RestoreArchive(path.clone()));
                     }

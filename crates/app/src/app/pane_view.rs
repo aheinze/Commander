@@ -933,8 +933,8 @@ impl PaneWidgets {
         self.path_entry.select_region(0, -1);
     }
 
-    pub(super) fn focus_files(&self, mode: PaneViewMode) {
-        match mode {
+    pub(super) fn focus_files(&self, state: &PaneState) {
+        match state.view_mode {
             PaneViewMode::List => {
                 self.column_view.grab_focus();
             }
@@ -942,9 +942,9 @@ impl PaneWidgets {
                 self.grid_view.grab_focus();
             }
             PaneViewMode::Columns => {
-                if let Some(view) = self
-                    .miller_columns
-                    .last()
+                if let Some(view) = state
+                    .active_miller_column()
+                    .and_then(|index| self.miller_columns.get(index))
                     .and_then(|column| column.view.as_ref())
                 {
                     view.grab_focus();
@@ -1228,13 +1228,16 @@ impl PaneWidgets {
         if tags_changed {
             self.rendered_tags_revision = tags_revision;
         }
-        if self.rendered_miller_revision != state.miller_revision || tags_changed {
+        if self.rendered_miller_revision != state.miller_revision
+            || self.rendered_selection_revision != state.selection_revision
+            || tags_changed
+        {
             self.rendered_miller_revision = state.miller_revision;
             self.render_miller(state, active, tags_changed, archives, sender);
         }
         if active && self.rendered_focus_files_epoch != state.focus_files_epoch {
             self.rendered_focus_files_epoch = state.focus_files_epoch;
-            self.focus_files(state.view_mode);
+            self.focus_files(state);
         }
         if self.rendered_sort != Some(state.sort) {
             self.rendered_sort = Some(state.sort);
@@ -1342,21 +1345,7 @@ impl PaneWidgets {
                         gtk::ListScrollFlags::FOCUS,
                         None,
                     ),
-                    PaneViewMode::Columns => {
-                        if let Some((view, row)) = self
-                            .miller_columns
-                            .last()
-                            .and_then(|column| column.view.as_ref())
-                            .zip(
-                                state
-                                    .miller_columns
-                                    .last()
-                                    .and_then(|column| column.selected_row),
-                            )
-                        {
-                            view.scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
-                        }
-                    }
+                    PaneViewMode::Columns => {}
                 }
             }
         }
@@ -1595,6 +1584,13 @@ impl PaneWidgets {
                     gtk::accessible::Property::MultiSelectable(true),
                 ]);
                 view.add_css_class("column-browser");
+                let focus = gtk::EventControllerFocus::new();
+                let input = sender.input_sender().clone();
+                let focus_path = column.path.clone();
+                focus.connect_enter(move |_| {
+                    let _ = input.send(AppMsg::MillerFocusColumn(pane, focus_path.clone()));
+                });
+                view.add_controller(focus);
                 // GTK couples single-click activation to selection on hover.
                 // Keep its normal selection behavior and activate folders only
                 // after an explicit, unmodified click has been released.
@@ -1835,9 +1831,9 @@ impl PaneWidgets {
                 reveal_pending.replace(false),
             ));
         });
-        let cursor = state
-            .miller_columns
-            .last()
+        let active_column = state.active_miller_column();
+        let cursor = active_column
+            .map(|index| &state.miller_columns[index])
             .map(|column| (column.path.clone(), column.selected_row));
         if self.rendered_miller_cursor != cursor {
             self.rendered_miller_cursor = cursor;
@@ -1856,16 +1852,12 @@ impl PaneWidgets {
             if active
                 && file_focus
                 && self.rendered_scroll_restore == state.scroll_restore_epoch
+                && let Some(index) = active_column
                 && let Some((view, row)) = self
                     .miller_columns
-                    .last()
+                    .get(index)
                     .and_then(|column| column.view.as_ref())
-                    .zip(
-                        state
-                            .miller_columns
-                            .last()
-                            .and_then(|column| column.selected_row),
-                    )
+                    .zip(state.miller_columns[index].selected_row)
             {
                 view.scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
                 view.grab_focus();

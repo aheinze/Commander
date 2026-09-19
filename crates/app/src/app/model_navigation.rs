@@ -312,6 +312,7 @@ impl AppModel {
                     columns: vec![previous.to_storage_string()],
                     selected_names,
                     horizontal_scroll: 0,
+                    ..NavigationSession::default()
                 },
             );
             state.active_mut().navigate(previous);
@@ -321,7 +322,7 @@ impl AppModel {
         if !restore_branch {
             // An explicit breadcrumb or location must end at the requested folder.
             if state.miller_columns.len() > 1 {
-                state.restore_names.clear();
+                state.clear_restore_selection();
             }
             state.miller_columns.truncate(1);
         }
@@ -329,7 +330,7 @@ impl AppModel {
             let state = self.pane_mut(pane);
             // A search hit takes priority over the folder's saved cursor and branch.
             state.restore_cursor = None;
-            state.restore_names.clear();
+            state.clear_restore_selection();
             if let Some(column) = state.miller_columns.first_mut() {
                 column.restore_name = None;
                 column.selected_row = None;
@@ -583,18 +584,19 @@ impl AppModel {
             let state = self.pane_mut(pane);
             state.selection.replace([key]);
             state.selection_revision = state.selection_revision.wrapping_add(1);
-            state.restore_names.clear();
+            state.clear_restore_selection();
             state.range_anchor = None;
+            state.focus_miller_column(column);
             state.miller_focus = Some((path, kind));
             state.miller_revision = state.miller_revision.wrapping_add(1);
             return;
         }
-        let (generation, next_column, sort, show_hidden) = {
+        {
             let state = self.pane_mut(pane);
             if column + 1 < state.miller_columns.len() || kind == EntryKind::Directory {
                 state.selection.replace([key]);
                 state.selection_revision = state.selection_revision.wrapping_add(1);
-                state.restore_names.clear();
+                state.clear_restore_selection();
                 state.range_anchor = None;
             }
             if let Some(cancel) = state.miller_cancel.take() {
@@ -604,9 +606,9 @@ impl AppModel {
             if let Some(current) = state.miller_columns.get_mut(column) {
                 current.selected_row = Some(row);
             }
+            state.focus_miller_column(column);
             state.miller_focus = Some((path.clone(), kind));
             state.miller_generation = state.miller_generation.wrapping_add(1);
-            let generation = state.miller_generation;
             if kind == EntryKind::Directory {
                 state.miller_columns.push(MillerColumnState {
                     base_listing: None,
@@ -627,14 +629,15 @@ impl AppModel {
                     width: next_width,
                 });
             }
+            if kind == EntryKind::Directory {
+                state.miller_active_column = Some(path.clone());
+            }
             state.miller_revision = state.miller_revision.wrapping_add(1);
-            (generation, column + 1, state.sort, state.show_hidden)
-        };
+        }
         self.start_preview(sender);
         if kind != EntryKind::Directory {
             return;
         }
-        let _ = (generation, next_column, sort, show_hidden);
         self.pane_mut(pane).filter_query.clear();
         self.refresh_miller(pane, false, sender);
         self.persist_session();
@@ -782,20 +785,24 @@ impl AppModel {
             // Column view keeps its context: a folder opens in the next column, the
             // same as Right, rather than re-rooting the pane. Files open as usual.
             let state = self.pane(pane);
-            let column = state.miller_columns.len().saturating_sub(1);
-            let next_column = state
-                .miller_columns
-                .get(column)
-                .and_then(|column| column.selected_row)
-                .filter(|_| {
-                    state
-                        .miller_focus
-                        .as_ref()
-                        .is_some_and(|(_, kind)| *kind == EntryKind::Directory)
-                });
-            if let Some(row) = next_column {
+            let Some(column) = state.active_miller_column() else {
+                return;
+            };
+            let Some(row) = state.miller_columns[column].selected_row else {
+                return;
+            };
+            let Some(entry) = state.miller_columns[column]
+                .listing
+                .as_ref()
+                .and_then(|listing| listing.row(row as usize))
+            else {
+                return;
+            };
+            let path = state.miller_columns[column].path.join_name(entry.name());
+            let kind = entry.kind();
+            if kind.is_directory() {
                 self.open_miller_row(pane, column, row, sender);
-            } else if let Some((path, kind)) = state.miller_focus.clone() {
+            } else {
                 self.open_path(pane, kind, path, sender);
             }
         } else {

@@ -41,6 +41,8 @@ struct JobPresentation {
     can_pause: bool,
     can_cancel: bool,
     can_retry: bool,
+    low_space: bool,
+    checking_space: bool,
     finished: bool,
 }
 
@@ -49,6 +51,7 @@ impl JobPresentation {
         let active = operation.is_active();
         let cancelling = active && operation.control.cancel_token().is_cancelled();
         let paused = active && operation.control.is_paused();
+        let space = operation.control.space_issue().filter(|_| active);
         let values = &operation.progress;
         // Trash and delete report items; their scanned byte totals are not bytes copied.
         let use_bytes = matches!(
@@ -71,6 +74,14 @@ impl JobPresentation {
             "Cancelling…"
         } else if active && operation.waiting_for_conflict {
             "Needs a decision"
+        } else if let Some(space) = &space {
+            if space.checking {
+                "Checking free space…"
+            } else if space.available_bytes.is_none() {
+                "Free space unavailable"
+            } else {
+                "Not enough space"
+            }
         } else if paused {
             "Paused"
         } else {
@@ -134,6 +145,19 @@ impl JobPresentation {
                 detail.push_str(&format!(" · {} remaining", format_eta(eta)));
             }
         }
+        if let Some(space) = &space {
+            detail = format!(
+                "{} needed · {} available",
+                format_size(space.required_bytes, EntryKind::File),
+                space.available_bytes.map_or_else(
+                    || "Unknown".into(),
+                    |bytes| format_size(bytes, EntryKind::File)
+                )
+            );
+            if let Some(error) = &space.error {
+                detail.push_str(&format!(" — {error}"));
+            }
+        }
         let mut path = values
             .current_path
             .as_ref()
@@ -167,7 +191,10 @@ impl JobPresentation {
             path,
             fraction,
             error: operation.error.clone(),
-            busy: active && !paused && !operation.waiting_for_conflict,
+            low_space: space.is_some(),
+            checking_space: space.as_ref().is_some_and(|space| space.checking),
+            busy: space.as_ref().is_some_and(|space| space.checking)
+                || (active && !paused && !operation.waiting_for_conflict),
             paused,
             can_pause: operation.can_control() && !operation.waiting_for_conflict,
             can_cancel: operation.can_control(),
@@ -226,12 +253,15 @@ fn render_progress(progress: &gtk::ProgressBar, view: &JobPresentation) {
 
 struct JobRowWidgets {
     root: gtk::Box,
+    header: gtk::Box,
+    actions: gtk::Box,
     title: gtk::Label,
     status: gtk::Label,
     detail: gtk::Label,
     path: gtk::Label,
     progress: gtk::ProgressBar,
     spinner: gtk::Spinner,
+    recheck: gtk::Button,
     pause: gtk::Button,
     cancel: gtk::Button,
     retry: gtk::Button,
@@ -267,17 +297,19 @@ impl JobRowWidgets {
         root.append(&footer);
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         actions.set_halign(gtk::Align::End);
+        let recheck = gtk::Button::with_label("Recheck space");
         let pause = icon_button("commander-pause-symbolic", "Pause operation");
         let cancel = icon_button("commander-circle-x-symbolic", "Cancel operation");
         let retry = icon_button("commander-rotate-cw-symbolic", "Retry operation");
         let dismiss = icon_button("commander-x-symbolic", "Dismiss finished operation");
-        for button in [&pause, &cancel, &retry, &dismiss] {
+        for button in [&recheck, &pause, &cancel, &retry, &dismiss] {
             button.add_css_class("flat");
             button.add_css_class("operation-action");
             button.set_valign(gtk::Align::Center);
             actions.append(button);
         }
         cancel.add_css_class("operation-action-danger");
+        connect_job_button(&recheck, sender, id, AppMsg::RecheckOperationSpace);
         connect_job_button(&pause, sender, id, AppMsg::TogglePauseOperation);
         connect_job_button(&cancel, sender, id, AppMsg::CancelOperation);
         connect_job_button(&retry, sender, id, AppMsg::RetryOperation);
@@ -285,12 +317,15 @@ impl JobRowWidgets {
         header.append(&actions);
         Self {
             root,
+            header,
+            actions,
             title,
             status,
             detail,
             path,
             progress,
             spinner,
+            recheck,
             pause,
             cancel,
             retry,
@@ -304,6 +339,23 @@ impl JobRowWidgets {
         if self.rendered.as_ref() == Some(&view) {
             return;
         }
+        // Text actions need their own row in the narrow Jobs popover.
+        if self
+            .rendered
+            .as_ref()
+            .is_some_and(|old| old.low_space != view.low_space)
+            || (self.rendered.is_none() && view.low_space)
+        {
+            if let Some(parent) = self.actions.parent().and_downcast::<gtk::Box>() {
+                parent.remove(&self.actions);
+            }
+            if view.low_space {
+                self.root.append(&self.actions);
+            } else {
+                self.header.append(&self.actions);
+            }
+        }
+        self.actions.set_spacing(if view.low_space { 8 } else { 2 });
         self.title.set_label(operation.kind.label());
         self.status.set_label(&match view.fraction {
             Some(fraction) if view.status == "In progress" => {
@@ -317,12 +369,20 @@ impl JobRowWidgets {
         self.path.set_tooltip_text(Some(&view.path));
         self.spinner.set_spinning(view.busy);
         self.spinner.set_visible(view.busy);
-        self.pause.set_icon_name(if view.paused {
-            "commander-play-symbolic"
+        if view.low_space {
+            if self.pause.label().as_deref() != Some("Resume anyway") {
+                self.pause.set_label("Resume anyway");
+            }
         } else {
-            "commander-pause-symbolic"
-        });
-        let label = if view.paused {
+            self.pause.set_icon_name(if view.paused {
+                "commander-play-symbolic"
+            } else {
+                "commander-pause-symbolic"
+            });
+        }
+        let label = if view.low_space {
+            "Resume anyway"
+        } else if view.paused {
             "Resume operation"
         } else {
             "Pause operation"
@@ -330,6 +390,9 @@ impl JobRowWidgets {
         self.pause.set_tooltip_text(Some(label));
         self.pause
             .update_property(&[gtk::accessible::Property::Label(label)]);
+        self.recheck.set_visible(view.low_space);
+        self.recheck
+            .set_sensitive(view.can_cancel && !view.checking_space);
         self.pause.set_visible(!view.finished);
         self.pause.set_sensitive(view.can_pause);
         self.cancel.set_visible(!view.finished);
@@ -389,6 +452,7 @@ pub(super) struct JobActivityWidgets {
     spinner: gtk::Spinner,
     state_icon: gtk::Image,
     progress: gtk::ProgressBar,
+    recheck: gtk::Button,
     pause: gtk::Button,
     cancel: gtk::Button,
     dismiss: gtk::Button,
@@ -421,11 +485,16 @@ impl JobActivityWidgets {
         progress.set_valign(gtk::Align::Center);
         root.append(&progress);
         let featured = Rc::new(Cell::new(None));
+        let recheck = gtk::Button::with_label("Recheck space");
         let pause = icon_button("commander-pause-symbolic", "Pause operation");
         let cancel = icon_button("commander-circle-x-symbolic", "Cancel operation");
         let dismiss = icon_button("commander-x-symbolic", "Dismiss finished operation");
         for (button, message) in [
-            (&pause, AppMsg::TogglePauseOperation as fn(JobId) -> AppMsg),
+            (
+                &recheck,
+                AppMsg::RecheckOperationSpace as fn(JobId) -> AppMsg,
+            ),
+            (&pause, AppMsg::TogglePauseOperation),
             (&cancel, AppMsg::CancelOperation),
             (&dismiss, AppMsg::DismissOperation),
         ] {
@@ -469,6 +538,7 @@ impl JobActivityWidgets {
             spinner,
             state_icon,
             progress,
+            recheck,
             pause,
             cancel,
             dismiss,
@@ -499,7 +569,11 @@ impl JobActivityWidgets {
             }
             _ => view.title.clone(),
         };
-        self.title.set_label(&title);
+        self.title.set_label(&if view.low_space {
+            format!("{title} · {}", view.detail)
+        } else {
+            title.clone()
+        });
         let detail = view.error.as_deref().unwrap_or(&view.detail);
         self.title
             .set_tooltip_text(Some(&format!("{title}\n{detail}\n{}", view.path)));
@@ -510,7 +584,10 @@ impl JobActivityWidgets {
         self.spinner.set_visible(indeterminate);
         self.state_icon.set_visible(!view.busy);
         self.state_icon.set_icon_name(Some(
-            if operation.state == JobState::Failed || operation.waiting_for_conflict {
+            if operation.state == JobState::Failed
+                || operation.waiting_for_conflict
+                || view.low_space
+            {
                 "commander-triangle-alert-symbolic"
             } else if view.paused {
                 "commander-pause-symbolic"
@@ -520,19 +597,30 @@ impl JobActivityWidgets {
                 "commander-circle-x-symbolic"
             },
         ));
-        if operation.state == JobState::Failed || operation.waiting_for_conflict {
+        if operation.state == JobState::Failed || operation.waiting_for_conflict || view.low_space {
             self.root.add_css_class("job-activity-attention");
         } else {
             self.root.remove_css_class("job-activity-attention");
         }
+        self.recheck.set_visible(view.low_space);
+        self.recheck
+            .set_sensitive(view.can_cancel && !view.checking_space);
         self.pause.set_visible(!view.finished);
         self.pause.set_sensitive(view.can_pause);
-        self.pause.set_icon_name(if view.paused {
-            "commander-play-symbolic"
+        if view.low_space {
+            if self.pause.label().as_deref() != Some("Resume anyway") {
+                self.pause.set_label("Resume anyway");
+            }
         } else {
-            "commander-pause-symbolic"
-        });
-        let label = if view.paused {
+            self.pause.set_icon_name(if view.paused {
+                "commander-play-symbolic"
+            } else {
+                "commander-pause-symbolic"
+            });
+        }
+        let label = if view.low_space {
+            "Resume anyway"
+        } else if view.paused {
             "Resume operation"
         } else {
             "Pause operation"

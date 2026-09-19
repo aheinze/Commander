@@ -100,9 +100,29 @@ impl Default for JobProgress {
     }
 }
 
+/// A destination-space estimate that requires a user decision.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SpaceIssue {
+    pub destination: VPath,
+    pub required_bytes: u64,
+    pub available_bytes: Option<u64>,
+    pub error: Option<String>,
+    pub checking: bool,
+}
+
+#[derive(Debug, Default)]
+struct PauseGate {
+    paused: bool,
+    space: Option<SpaceIssue>,
+    recheck: bool,
+}
+
 /// Events consumed by the app or a future task centre.
 #[derive(Clone, Debug, PartialEq)]
 pub enum JobEvent {
+    SpaceChanged {
+        id: JobId,
+    },
     Phase {
         id: JobId,
         phase: JobPhase,
@@ -148,7 +168,7 @@ pub struct JobSummary {
 #[derive(Clone, Debug)]
 pub struct JobControl {
     cancel: CancelToken,
-    pause: Arc<(Mutex<bool>, Condvar)>,
+    pause: Arc<(Mutex<PauseGate>, Condvar)>,
     journal: Option<Arc<crate::journal::JobJournal>>,
     phase_sink: Option<(JobId, Sender<JobEvent>)>,
     last_phase_emit: Arc<Mutex<Option<Instant>>>,
@@ -160,7 +180,7 @@ impl JobControl {
     pub fn new() -> Self {
         Self {
             cancel: CancelToken::new(),
-            pause: Arc::new((Mutex::new(false), Condvar::new())),
+            pause: Arc::new((Mutex::new(PauseGate::default()), Condvar::new())),
             journal: None,
             phase_sink: None,
             last_phase_emit: Arc::new(Mutex::new(None)),
@@ -185,6 +205,10 @@ impl JobControl {
 
     pub(crate) fn retry_record(&self, source: &VPath) -> Option<&crate::TransferRecord> {
         self.retry_records.get(source)
+    }
+
+    pub(crate) fn retry_records(&self) -> impl Iterator<Item = &crate::TransferRecord> {
+        self.retry_records.values()
     }
 
     pub(crate) fn is_retry(&self) -> bool {
@@ -240,19 +264,131 @@ impl JobControl {
 
     pub fn pause(&self) {
         let (paused, _) = &*self.pause;
-        *paused.lock().expect("pause mutex poisoned") = true;
+        paused.lock().expect("pause mutex poisoned").paused = true;
     }
 
     /// Whether the worker's pause gate is currently closed.
     #[must_use]
     pub fn is_paused(&self) -> bool {
-        *self.pause.0.lock().expect("pause mutex poisoned")
+        self.pause.0.lock().expect("pause mutex poisoned").paused
     }
 
     pub fn resume(&self) {
         let (paused, wake) = &*self.pause;
-        *paused.lock().expect("pause mutex poisoned") = false;
+        let mut gate = paused.lock().expect("pause mutex poisoned");
+        gate.paused = false;
+        let space = gate.space.take().is_some();
+        gate.recheck = false;
+        drop(gate);
         wake.notify_all();
+        if space {
+            self.space_changed();
+        }
+    }
+
+    #[must_use]
+    pub fn space_issue(&self) -> Option<SpaceIssue> {
+        self.pause
+            .0
+            .lock()
+            .expect("pause mutex poisoned")
+            .space
+            .clone()
+    }
+
+    /// Ask the job worker to check free space again; no filesystem I/O runs here.
+    pub fn recheck_space(&self) {
+        let mut gate = self.pause.0.lock().expect("pause mutex poisoned");
+        if let Some(space) = &mut gate.space
+            && !space.checking
+        {
+            space.checking = true;
+            gate.recheck = true;
+            drop(gate);
+            self.pause.1.notify_all();
+            self.space_changed();
+        }
+    }
+
+    fn space_changed(&self) {
+        if let Some((id, events)) = &self.phase_sink {
+            let _ = events.send(JobEvent::SpaceChanged { id: *id });
+        }
+    }
+
+    /// Wait for a recheck or an explicit Resume override of a low-space estimate.
+    pub(crate) fn wait_for_space(
+        &self,
+        destination: &VPath,
+        required_bytes: u64,
+        available_bytes: u64,
+        mut query: impl FnMut() -> Result<Option<u64>, String>,
+        on_paused: impl FnOnce(),
+    ) -> Result<(), dualpane_core::Cancelled> {
+        let (paused, wake) = &*self.pause;
+        {
+            let mut gate = paused.lock().expect("pause mutex poisoned");
+            gate.paused = true;
+            gate.recheck = false;
+            gate.space = Some(SpaceIssue {
+                destination: destination.clone(),
+                required_bytes,
+                available_bytes: Some(available_bytes),
+                error: None,
+                checking: false,
+            });
+        }
+        on_paused();
+        self.space_changed();
+        loop {
+            let mut gate = paused.lock().expect("pause mutex poisoned");
+            while gate.space.is_some()
+                && gate.paused
+                && !gate.recheck
+                && !self.cancel.is_cancelled()
+            {
+                gate = wake.wait(gate).expect("pause mutex poisoned");
+            }
+            self.cancel.check()?;
+            if gate.space.is_none() || !gate.paused {
+                return Ok(());
+            }
+            gate.recheck = false;
+            drop(gate);
+            let result = query();
+            let mut gate = paused.lock().expect("pause mutex poisoned");
+            // A cancelled/resumed check cannot re-pause the job when a slow query returns.
+            self.cancel.check()?;
+            if gate.space.is_none() {
+                return Ok(());
+            }
+            match result {
+                Ok(Some(available)) if available >= required_bytes => {
+                    gate.space = None;
+                    gate.paused = false;
+                    drop(gate);
+                    wake.notify_all();
+                    self.space_changed();
+                    return Ok(());
+                }
+                result => {
+                    let space = gate.space.as_mut().unwrap();
+                    space.checking = false;
+                    let (available, error) = match result {
+                        Ok(Some(bytes)) => (Some(bytes), None),
+                        Ok(None) => (
+                            None,
+                            Some("The destination does not report available space.".into()),
+                        ),
+                        Err(error) => (None, Some(format!("Could not check free space: {error}"))),
+                    };
+                    space.available_bytes = available;
+                    space.error = error;
+                }
+            }
+            drop(gate);
+            self.space_changed();
+        }
     }
 
     /// Waits while paused and then observes cancellation.
@@ -263,7 +399,7 @@ impl JobControl {
     pub fn checkpoint(&self) -> Result<(), dualpane_core::Cancelled> {
         let (paused, wake) = &*self.pause;
         let mut guard = paused.lock().expect("pause mutex poisoned");
-        while *guard && !self.cancel.is_cancelled() {
+        while guard.paused && !self.cancel.is_cancelled() {
             guard = wake.wait(guard).expect("pause mutex poisoned");
         }
         drop(guard);
@@ -401,3 +537,7 @@ mod tests {
         assert_eq!(progress.items_done, 10);
     }
 }
+
+#[cfg(test)]
+#[path = "job_space_tests.rs"]
+mod space_tests;

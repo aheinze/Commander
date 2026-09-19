@@ -111,6 +111,9 @@ pub struct TransferRecord {
     /// False for a replacement or a merge into a pre-existing directory.
     pub created: bool,
     pub source_removed: bool,
+    /// Verified contents before move cleanup, usable when a remount changes inode IDs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 /// Completed work plus recoverable per-item failures and preservation warnings.
@@ -225,9 +228,16 @@ pub fn copy_plan(
         && let Ok(Some(available)) = vfs.available_space(destination)
         && available < plan.total_bytes
     {
-        control.pause();
-        state_changed(JobState::Paused);
-        control.checkpoint()?;
+        control.wait_for_space(
+            destination,
+            plan.total_bytes,
+            available,
+            || {
+                vfs.available_space(destination)
+                    .map_err(|error| error.to_string())
+            },
+            || state_changed(JobState::Paused),
+        )?;
         state_changed(JobState::Running);
     }
 
@@ -963,6 +973,7 @@ fn process_entry(
                         metadata,
                         created,
                         source_removed: false,
+                        fingerprint: None,
                     };
                     if !placement.target_tree_staged
                         && let Some(journal) = control.journal()
@@ -1715,6 +1726,16 @@ pub fn verify_copy_controlled(
     destination: &VPath,
     control: &JobControl,
 ) -> Result<(), JobError> {
+    verify_copy_fingerprint(vfs, source, destination, control).map(|_| ())
+}
+
+pub(crate) fn verify_copy_fingerprint(
+    vfs: &dyn Vfs,
+    source: &VPath,
+    destination: &VPath,
+    control: &JobControl,
+) -> Result<Option<String>, JobError> {
+    use sha2::{Digest, Sha256};
     use std::io::Read;
     let before = vfs
         .stat(source, false)
@@ -1726,7 +1747,7 @@ pub fn verify_copy_controlled(
         path: destination.clone(),
         operation: "verify copy",
         kind: JobErrorKind::IoError,
-        message: "destination differs from the source or source changed during verification"
+        message: "destination differs from the source or a file changed during verification"
             .to_owned(),
     };
     // Metadata preservation is best-effort: destinations such as SFTP may round
@@ -1735,6 +1756,7 @@ pub fn verify_copy_controlled(
     if before.kind != copied.kind || before.size != copied.size {
         return Err(differs());
     }
+    let mut digest = Sha256::new();
     if before.kind == EntryKind::File {
         let mut source_file = vfs.open_read(source).map_err(|error| {
             JobError::from_vfs(source.clone(), "verify source contents", &error)
@@ -1760,19 +1782,28 @@ pub fn verify_copy_controlled(
             if left[..count] != right[..count] {
                 return Err(differs());
             }
+            digest.update(&left[..count]);
             remaining -= count as u64;
         }
     }
     let after = vfs
         .stat(source, false)
         .map_err(|error| JobError::from_vfs(source.clone(), "recheck verified source", &error))?;
-    if before.identity != after.identity
+    let copied_after = vfs.stat(destination, false).map_err(|error| {
+        JobError::from_vfs(destination.clone(), "recheck verified destination", &error)
+    })?;
+    if before.kind != after.kind
+        || before.identity != after.identity
         || before.size != after.size
         || before.modified != after.modified
+        || copied.kind != copied_after.kind
+        || copied.identity != copied_after.identity
+        || copied.size != copied_after.size
+        || copied.modified != copied_after.modified
     {
         return Err(differs());
     }
-    Ok(())
+    Ok((before.kind == EntryKind::File).then(|| format!("{:x}", digest.finalize())))
 }
 
 fn append_warnings(outcome: &mut TransferOutcome, path: &VPath, warnings: Vec<String>) {

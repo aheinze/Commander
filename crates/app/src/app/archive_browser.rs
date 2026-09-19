@@ -188,6 +188,12 @@ impl ArchiveLocations {
             .into_iter()
             .map(|(path, mut location)| {
                 location.columns = location.columns.iter().map(|path| display(path)).collect();
+                location.selected_paths = location
+                    .selected_paths
+                    .iter()
+                    .map(|path| display(path))
+                    .collect();
+                location.focused_column = location.focused_column.as_deref().map(display);
                 (display(&path), location)
             })
             .collect();
@@ -669,6 +675,17 @@ impl AppModel {
         self.panes[index].locations = std::mem::take(&mut self.panes[index].locations)
             .into_iter()
             .map(|(path, mut location)| {
+                let resolve = |path: &str| {
+                    self.archive_mounts
+                        .resolve(&VPath::from_storage_string(path))
+                        .to_storage_string()
+                };
+                location.selected_paths = location
+                    .selected_paths
+                    .iter()
+                    .map(|path| resolve(path))
+                    .collect();
+                location.focused_column = location.focused_column.as_deref().map(resolve);
                 location.columns = location
                     .columns
                     .iter()

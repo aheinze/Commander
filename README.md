@@ -54,7 +54,10 @@ background as you browse.
 Track transfers in the activity strip, pause or cancel work, and inspect or retry
 failed jobs. Regular-file copies are verified before publication, and folder
 synchronization presents its planned changes for review before you apply them.
-Undo history and recovery records help you inspect and recover previous work.
+Low-space pauses explain what is needed and offer a free-space recheck. After a
+restart, Recovery lets you review and retry unfinished copies and moves while
+reusing verified completed files. Undo history and recovery records help you
+inspect and recover previous work.
 See the [operation guarantees and limits](docs/REFERENCE.md#file-operation-guarantees-and-limits)
 for the details of cancellation, retained originals, and recovery.
 

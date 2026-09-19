@@ -923,6 +923,7 @@ struct PaneState {
     folder_views: BTreeMap<String, FolderViewSession>,
     locations: BTreeMap<String, NavigationSession>,
     restore_names: Vec<String>,
+    restore_paths: Vec<VPath>,
     restore_cursor: Option<String>,
     pending_reveal: Option<VPath>,
     reveal_epoch: u64,
@@ -971,6 +972,7 @@ struct PaneState {
     glob_query: String,
     miller_columns: Vec<MillerColumnState>,
     miller_focus: Option<(VPath, EntryKind)>,
+    miller_active_column: Option<VPath>,
     miller_generation: u64,
     miller_revision: u64,
     miller_cancel: Option<CancelToken>,
@@ -997,6 +999,7 @@ impl PaneState {
             folder_views: session.folders.clone(),
             locations: session.locations.clone(),
             restore_names: Vec::new(),
+            restore_paths: Vec::new(),
             restore_cursor: None,
             pending_reveal: None,
             reveal_epoch: 0,
@@ -1058,6 +1061,7 @@ impl PaneState {
             glob_query: String::new(),
             miller_columns: Vec::new(),
             miller_focus: None,
+            miller_active_column: None,
             miller_generation: 0,
             miller_revision: 0,
             miller_cancel: None,
@@ -1142,6 +1146,7 @@ impl PaneState {
         self.glob_query.clear();
         self.miller_columns.clear();
         self.miller_focus = None;
+        self.miller_active_column = None;
         self.miller_revision = self.miller_revision.wrapping_add(1);
         self.restore_navigation();
     }
@@ -1301,6 +1306,7 @@ pub struct AppModel {
     history_busy: bool,
     recovery_records: Vec<dualpane_engine::journal::RecoveryRecord>,
     recovery_errors: Vec<String>,
+    recovery_retry: recovery::retry::State,
     clipboard_cut_jobs: BTreeMap<JobId, u64>,
     clipboard_provider: Option<gdk::ContentProvider>,
     clipboard_generation: u64,
@@ -1408,6 +1414,19 @@ pub enum AppMsg {
     },
     RecoveryFinished(Result<String, String>),
     ReviewRecovery(std::path::PathBuf),
+    PrepareRecoveryRetry(std::path::PathBuf),
+    RecoveryRetryPrepared {
+        id: u64,
+        result: Result<Arc<dualpane_engine::recovery::RecoveryPlan>, String>,
+    },
+    RecoveryRetryDecision {
+        id: u64,
+        confirmed: bool,
+    },
+    RecoveryRetryClaimed {
+        id: u64,
+        result: Result<Box<dualpane_engine::recovery::RecoveryClaim>, String>,
+    },
     ExecuteCommand(CommandId),
     NavigateActive(VPath),
     SidebarLocation {
@@ -1645,6 +1664,7 @@ pub enum AppMsg {
     Refresh(PaneId),
     OpenRow(PaneId, u32),
     MillerOpen(PaneId, usize, u32),
+    MillerFocusColumn(PaneId, VPath),
     MillerSelectionChanged {
         pane: PaneId,
         column: usize,
@@ -1834,6 +1854,7 @@ pub enum AppMsg {
     TogglePauseFirstOperation,
     CancelOperation(JobId),
     TogglePauseOperation(JobId),
+    RecheckOperationSpace(JobId),
     HistoryFinished {
         entry: HistoryEntry,
         direction: HistoryDirection,

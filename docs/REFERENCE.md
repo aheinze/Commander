@@ -269,12 +269,17 @@ that folder; drops on a column target that column's folder.
 Hovering over ancestor rows leaves the open columns and selection unchanged.
 A single click opens a folder; clicking an already-open ancestor keeps its nested
 branch in place.
+Arrow keys, Enter, Home/End, range selection, Select All, and filename type-ahead
+use the column with keyboard focus. Right enters its open child; Left returns to
+its parent (or folds the branch when the first column has focus). The Up button
+folds the deepest column. Repeating a filename's first letter cycles matches.
 
 Refresh reloads the whole visible branch, retaining valid selections by name. Sorting
 and hidden-file changes update the columns; filtering narrows the last column while
 keeping ancestor folders visible. Missing branches are removed after refresh.
 Column widths, expanded paths, selections, and scroll offsets survive restarts and
-navigation between tabs/folders. Sort and hidden-file preferences are restored when
+navigation between tabs/folders, including selections in ancestor columns and the
+focused column. Sort and hidden-file preferences are restored when
 returning to a folder. The chosen List, Grid, or Columns mode stays with the pane
 across directory and tab navigation and is saved for the next launch.
 
@@ -458,6 +463,12 @@ Keep Both selects a distinct name for every conflict. Batch rename, undo, and re
 stage overlapping names and refuse unexpected destination collisions. Failed
 operations are reported as failed and remain available for inspection/retry.
 
+When a destination reports insufficient free space before a transfer, Jobs shows
+bytes needed and available. **Recheck space** checks again in the background and
+continues automatically when enough space is available. Failed or unsupported
+checks keep the job paused with an explanation. **Resume anyway** overrides the
+estimate; **Cancel** stops the job without starting the pending copy.
+
 Undo uses the actual transfer outputs, including Keep Both, overwrites, and directory
 merges. Original overwritten items are retained beside their destinations under hidden
 `.commander-undo-…` names. Undo checks identity, size, and modification times and refuses
@@ -495,6 +506,20 @@ are never overwritten by that recovery action. Archive operation details also of
 archive still matches that saved operation. It keeps the current version as another
 recovery copy and adds an Undo entry. Retained originals and temporary outputs
 are not automatically deleted. Inspect the listed locations before removing them.
+Interrupted, failed, or cancelled copy and move records offer **Retry remaining
+items…**. Review the original sources and destination, reconnect remote locations
+if needed, then confirm. Commander rereads and locks the record before starting,
+rescans sources, and verifies saved destinations before reusing completed files.
+Cross-filesystem moves save content fingerprints before removing sources. After
+an SFTP reconnect changes filesystem IDs, Recovery can use these fingerprints to
+recognize completed files and folder contents. Older records without fingerprints
+remain conservative when those IDs change.
+Changed files use the usual conflict choices. Partial files are copied again from
+the beginning; unfinished journal steps are never replayed directly. A new durable
+record carries the completed-file checkpoints forward and links from the previous
+attempt. Further retries use the newest attempt. Retries started from Recovery do
+not create a new Undo entry; retained originals remain available in Recovery.
+
 An interrupted undo/redo is archived for review and its history is not automatically
 replayed. Records live in the application's XDG state directory (`dualpane/jobs` and
 `dualpane/history.json`).
@@ -696,6 +721,9 @@ Closing that tab cancels the attempt; cancelled and superseded results are ignor
 An attempt that has not finished within 60 seconds stops and offers connection
 options through the error notification. Retry and password-reset retry retain the
 original tab. Already mounted connections are not unmounted by cancelling an attempt.
+Before reporting a connection ready, Commander checks its native filesystem path
+on a worker and briefly retries transient reconnect errors. This prevents browsing
+or Recovery from starting against a GVfs view that is still being replaced.
 
 Closing Commander during a file operation, history operation, tool, or connection
 asks whether to **Keep working** (the default) or **Cancel operations and quit**.

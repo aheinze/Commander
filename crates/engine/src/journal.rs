@@ -29,7 +29,7 @@ pub struct ArchiveChange {
     pub after: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct MutationIntent {
     pub sequence: u64,
     pub action: String,
@@ -72,11 +72,36 @@ pub enum JournalEvent {
     Reviewed,
 }
 
+/// Keep every output, with the latest checkpoint for a source ordered last.
+/// A source may legitimately be selected both directly and inside a selected folder.
+#[derive(Debug, Default)]
+pub(crate) struct TransferLog {
+    records: BTreeMap<(VPath, VPath), (u64, TransferRecord)>,
+    sequence: u64,
+}
+impl TransferLog {
+    pub(crate) fn insert(&mut self, record: TransferRecord) {
+        self.sequence += 1;
+        self.records.insert(
+            (record.source.clone(), record.destination.clone()),
+            (self.sequence, record),
+        );
+    }
+    pub(crate) fn ordered(&self) -> Vec<TransferRecord> {
+        let mut records: Vec<_> = self.records.values().collect();
+        records.sort_by_key(|(sequence, _)| *sequence);
+        records
+            .into_iter()
+            .map(|(_, record)| record.clone())
+            .collect()
+    }
+}
+
 #[derive(Debug)]
 struct Writer {
     file: File,
     sequence: u64,
-    transfers: BTreeMap<(VPath, VPath), TransferRecord>,
+    transfers: TransferLog,
     trash: Vec<TrashRecord>,
     backups: Vec<BackupRecord>,
     intents: BTreeMap<u64, MutationIntent>,
@@ -135,7 +160,7 @@ impl JobJournal {
             writer: Mutex::new(Writer {
                 file,
                 sequence: 0,
-                transfers: BTreeMap::new(),
+                transfers: TransferLog::default(),
                 trash: Vec::new(),
                 backups: Vec::new(),
                 intents: BTreeMap::new(),
@@ -230,10 +255,7 @@ impl JobJournal {
             },
         )
         .map_err(|error| journal_error(&self.path, error))?;
-        writer.transfers.insert(
-            (record.source.clone(), record.destination.clone()),
-            record.clone(),
-        );
+        writer.transfers.insert(record.clone());
         Ok(())
     }
 
@@ -253,9 +275,9 @@ impl JobJournal {
     pub fn partial_outcome(&self) -> TransferOutcome {
         let writer = self.writer.lock().expect("journal mutex poisoned");
         TransferOutcome {
-            completed_items: (writer.transfers.len() + writer.trash.len()) as u64
+            completed_items: (writer.transfers.records.len() + writer.trash.len()) as u64
                 + writer.deleted_items,
-            transfers: writer.transfers.values().cloned().collect(),
+            transfers: writer.transfers.ordered(),
             trash_records: writer.trash.clone(),
             backups: writer.backups.clone(),
             journal_path: Some(self.path.clone()),
@@ -283,7 +305,7 @@ fn journal_error(path: &Path, error: std::io::Error) -> JobError {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RecoveryRecord {
     pub path: PathBuf,
     pub kind: JobKind,
@@ -300,16 +322,21 @@ pub struct RecoveryRecord {
     pub reviewed: bool,
     pub incomplete_tail: bool,
     pub archive: Option<ArchiveChange>,
+    pub retry: Option<PathBuf>,
 }
 
 pub fn read_journal(path: &Path) -> std::io::Result<RecoveryRecord> {
     let file = OpenOptions::new().read(true).write(true).open(path)?;
     // A different live Commander still owns this job; never offer recovery for it.
     file.try_lock().map_err(std::io::Error::from)?;
+    read_locked_journal(path, &file)
+}
+
+pub(crate) fn read_locked_journal(path: &Path, file: &File) -> std::io::Result<RecoveryRecord> {
     let mut record: Option<RecoveryRecord> = None;
     let mut pending = BTreeMap::new();
-    let mut transfers = BTreeMap::new();
-    for line in BufReader::new(&file).split(b'\n') {
+    let mut transfers = TransferLog::default();
+    for line in BufReader::new(file).split(b'\n') {
         let line = line?;
         if line.is_empty() {
             continue;
@@ -356,6 +383,7 @@ pub fn read_journal(path: &Path) -> std::io::Result<RecoveryRecord> {
                 reviewed: false,
                 incomplete_tail: false,
                 archive: None,
+                retry: None,
             });
             continue;
         }
@@ -377,10 +405,7 @@ pub fn read_journal(path: &Path) -> std::io::Result<RecoveryRecord> {
             }
             JournalEvent::Backup { record: backup } => record.backups.push(backup),
             JournalEvent::Transfer { record: transfer } => {
-                transfers.insert(
-                    (transfer.source.clone(), transfer.destination.clone()),
-                    transfer,
-                );
+                transfers.insert(transfer);
             }
             JournalEvent::Trash { record: trash } => record.trash.push(trash),
             JournalEvent::Finished {
@@ -398,12 +423,17 @@ pub fn read_journal(path: &Path) -> std::io::Result<RecoveryRecord> {
     }
     let mut record = record
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "empty journal"))?;
-    record.transfers = transfers.into_values().collect();
+    record.transfers = transfers.ordered();
     record.completed_items = record
         .completed_items
         .max((record.transfers.len() + record.trash.len()) as u64);
     record.pending = pending.into_values().collect();
     record.reviewed |= path.with_extension("reviewed").is_file();
+    record.retry = match File::open(path.with_extension("retry")) {
+        Ok(file) => Some(serde_json::from_reader(file).map_err(std::io::Error::other)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
     Ok(record)
 }
 

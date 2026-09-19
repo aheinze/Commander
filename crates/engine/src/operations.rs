@@ -174,6 +174,7 @@ pub fn move_paths(
                         metadata: source_metadata.clone(),
                         created: true,
                         source_removed: true,
+                        fingerprint: None,
                     });
                     if let Err(error) = control.applied(intent) {
                         outcome.errors.push(error);
@@ -262,9 +263,18 @@ pub fn move_paths(
             let Some(entry) = scanned.get(&record.source) else {
                 continue;
             };
-            if let Err(error) = verify_move_entry(vfs, entry, record, control) {
+            record.fingerprint = match verify_move_entry(vfs, entry, record, control) {
+                Ok(fingerprint) => fingerprint,
+                Err(error) => {
+                    copied.errors.push(error);
+                    continue;
+                }
+            };
+            if let Some(journal) = control.journal()
+                && let Err(error) = journal.transfer(record)
+            {
                 copied.errors.push(error);
-                continue;
+                break;
             }
             let intent = match control.intent(
                 "remove copied source",
@@ -507,7 +517,7 @@ fn verify_move_entry(
     entry: &crate::PlanEntry,
     record: &TransferRecord,
     control: &JobControl,
-) -> Result<(), JobError> {
+) -> Result<Option<String>, JobError> {
     let destination = &record.destination;
     let current = vfs
         .stat(&entry.source, false)
@@ -527,6 +537,7 @@ fn verify_move_entry(
     let metadata = vfs
         .stat(destination, false)
         .map_err(|error| JobError::from_vfs(destination.clone(), "verify move", &error))?;
+    let mut fingerprint = None;
     let valid = match entry.metadata.kind {
         EntryKind::File => {
             // The copy already verified the bytes. Check the destination against
@@ -538,19 +549,31 @@ fn verify_move_entry(
                 && metadata.modified == record.metadata.modified
         }
         EntryKind::Symlink => {
-            metadata.kind == EntryKind::Symlink
-                && matches!((vfs.read_link(&entry.source), vfs.read_link(destination)), (Ok(source), Ok(target)) if source == target)
+            use sha2::{Digest, Sha256};
+            match (vfs.read_link(&entry.source), vfs.read_link(destination)) {
+                (Ok(source), Ok(target))
+                    if metadata.kind == EntryKind::Symlink && source == target =>
+                {
+                    fingerprint = Some(format!(
+                        "{:x}",
+                        Sha256::digest(target.as_os_str().as_encoded_bytes())
+                    ));
+                    true
+                }
+                _ => false,
+            }
         }
         kind => metadata.kind == kind,
     };
     if valid {
-        if metadata.kind == EntryKind::File && metadata.modified != entry.metadata.modified {
-            // With rounded or unpreserved timestamps, recheck contents before
-            // deleting the source; matching destination metadata alone cannot
-            // show that the published file still contains the verified bytes.
-            crate::verify_copy_controlled(vfs, &entry.source, destination, control)?;
+        if metadata.kind == EntryKind::File {
+            // Persist proof of the verified bytes before removing the only source.
+            // GVfs inode IDs may change on reconnect, so inode equality alone cannot
+            // recognize this completed move in a later attempt.
+            crate::transfer::verify_copy_fingerprint(vfs, &entry.source, destination, control)
+        } else {
+            Ok(fingerprint)
         }
-        Ok(())
     } else {
         Err(JobError {
             path: destination.clone(),
@@ -634,6 +657,7 @@ mod tests {
                 metadata: LocalFs.stat(&destination, false).unwrap(),
                 created: true,
                 source_removed: false,
+                fingerprint: None,
             };
             verify_move_entry(&LocalFs, &entry, &record, &JobControl::new()).unwrap();
             if change != "timestamp" {

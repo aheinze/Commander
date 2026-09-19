@@ -725,8 +725,38 @@ pub(super) async fn mount_connection(connection: RemoteConnection) -> Result<VPa
                 }
             })
     });
-    path.map(VPath::from)
-        .ok_or_else(|| "The remote mounted but did not expose a native filesystem path".to_owned())
+    let path = path.ok_or_else(|| {
+        "The remote mounted but did not expose a native filesystem path".to_owned()
+    })?;
+    // A successful GIO mount can precede replacement of a disconnected FUSE view.
+    // Verify the path used by the file engine off the GTK thread before navigation/retry.
+    let native = path.clone();
+    gio::spawn_blocking(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let result = std::fs::read_dir(&native).and_then(|mut entries| {
+                match entries.next().transpose()? {
+                    Some(entry) => std::fs::symlink_metadata(entry.path()).map(|_| ()),
+                    None => Ok(()),
+                }
+            });
+            match result {
+                Ok(_) => return Ok(()),
+                Err(error)
+                    if matches!(error.raw_os_error(), Some(2 | 5 | 107 | 116))
+                        && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "The server connected, but its filesystem is not ready: {error}. Reconnect and try again."
+                    ));
+                }
+            }
+        }
+    }).await.map_err(|_| "The remote filesystem readiness check failed".to_owned())??;
+    Ok(path.into())
 }
 
 /// Native credential and host-key sheets for mounts without a connection form.
