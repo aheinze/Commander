@@ -16,6 +16,8 @@ pub enum Failure {
     Sync,
     Cancel,
     Crash,
+    CorruptCopy,
+    SourceChanged,
 }
 
 pub struct FaultFs {
@@ -24,6 +26,7 @@ pub struct FaultFs {
     pub trash: PathBuf,
     pub cross_device: bool,
     pub nonseekable: bool,
+    pub coarse_timestamps: bool,
     pub cancel: CancelToken,
     pub triggered: Arc<AtomicBool>,
 }
@@ -35,6 +38,7 @@ impl FaultFs {
             trash,
             cross_device: false,
             nonseekable: false,
+            coarse_timestamps: false,
             cancel: CancelToken::new(),
             triggered: Arc::new(AtomicBool::new(false)),
         }
@@ -69,6 +73,15 @@ impl Vfs for FaultFs {
     }
     fn open_read(&self, p: &VPath) -> Result<Box<dyn ReadSeek>> {
         let inner = LocalFs.open_read(p)?;
+        if p == &self.source
+            && matches!(self.failure, Some(Failure::SourceChanged))
+            && !self.triggered.swap(true, Ordering::SeqCst)
+        {
+            let file = std::fs::File::open(p.as_path()).unwrap();
+            let modified = file.metadata().unwrap().modified().unwrap();
+            file.set_modified(modified + std::time::Duration::from_nanos(1))
+                .unwrap();
+        }
         if p == &self.source
             && (self.nonseekable || matches!(self.failure, Some(Failure::Disconnected)))
         {
@@ -122,7 +135,21 @@ impl Vfs for FaultFs {
         LocalFs.create_symlink(a, b)
     }
     fn preserve_metadata(&self, s: &VPath, d: &VPath, m: &Metadata) -> Result<Vec<String>> {
-        LocalFs.preserve_metadata(s, d, m)
+        if m.kind == EntryKind::File && matches!(self.failure, Some(Failure::CorruptCopy)) {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .open(d.as_path())
+                .unwrap();
+            file.write_all(b"corrupt").unwrap();
+            self.triggered.store(true, Ordering::SeqCst);
+        }
+        let mut metadata = m.clone();
+        if self.coarse_timestamps
+            && let Some(modified) = metadata.modified.as_mut()
+        {
+            modified.nanoseconds = 0;
+        }
+        LocalFs.preserve_metadata(s, d, &metadata)
     }
     fn sync_file(&self, p: &VPath) -> Result<()> {
         if matches!(self.failure, Some(Failure::Sync)) {

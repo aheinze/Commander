@@ -254,7 +254,7 @@ pub fn move_paths(
             let Some(entry) = scanned.get(&record.source) else {
                 continue;
             };
-            if let Err(error) = verify_move_entry(vfs, entry, &record.destination) {
+            if let Err(error) = verify_move_entry(vfs, entry, record, control) {
                 copied.errors.push(error);
                 continue;
             }
@@ -497,8 +497,10 @@ fn path_is_missing(vfs: &dyn Vfs, path: &VPath) -> bool {
 fn verify_move_entry(
     vfs: &dyn Vfs,
     entry: &crate::PlanEntry,
-    destination: &VPath,
+    record: &TransferRecord,
+    control: &JobControl,
 ) -> Result<(), JobError> {
+    let destination = &record.destination;
     let current = vfs
         .stat(&entry.source, false)
         .map_err(|error| JobError::from_vfs(entry.source.clone(), "recheck move source", &error))?;
@@ -519,9 +521,13 @@ fn verify_move_entry(
         .map_err(|error| JobError::from_vfs(destination.clone(), "verify move", &error))?;
     let valid = match entry.metadata.kind {
         EntryKind::File => {
+            // The copy already verified the bytes. Check the destination against
+            // its recorded metadata, which may have less timestamp precision than
+            // the source, and retain the source if that destination has changed.
             metadata.kind == EntryKind::File
                 && metadata.size == entry.metadata.size
-                && metadata.modified == entry.metadata.modified
+                && metadata.identity == record.metadata.identity
+                && metadata.modified == record.metadata.modified
         }
         EntryKind::Symlink => {
             metadata.kind == EntryKind::Symlink
@@ -530,13 +536,20 @@ fn verify_move_entry(
         kind => metadata.kind == kind,
     };
     if valid {
+        if metadata.kind == EntryKind::File && metadata.modified != entry.metadata.modified {
+            // With rounded or unpreserved timestamps, recheck contents before
+            // deleting the source; matching destination metadata alone cannot
+            // show that the published file still contains the verified bytes.
+            crate::verify_copy_controlled(vfs, &entry.source, destination, control)?;
+        }
         Ok(())
     } else {
         Err(JobError {
             path: destination.clone(),
             operation: "verify move",
             kind: JobErrorKind::IoError,
-            message: "destination differs from the scanned source".to_owned(),
+            message: "destination changed after copying or differs from the scanned source"
+                .to_owned(),
         })
     }
 }
@@ -579,8 +592,71 @@ mod tests {
     use dualpane_vfs::{LocalFs, Vfs};
     use tempfile::tempdir;
 
-    use super::{delete_permanently, percent_encode, trash_sources};
-    use crate::JobControl;
+    use super::{delete_permanently, percent_encode, trash_sources, verify_move_entry};
+    use crate::{JobControl, PlanEntry, TransferRecord};
+
+    #[test]
+    fn move_cleanup_rejects_changes_to_the_recorded_destination() {
+        for change in ["timestamp", "replacement", "contents"] {
+            let fixture = tempdir().unwrap();
+            let source = VPath::from(fixture.path().join("source"));
+            let destination = VPath::from(fixture.path().join("destination"));
+            fs::write(source.as_path(), b"payload").unwrap();
+            fs::write(destination.as_path(), b"payload").unwrap();
+            let source_time =
+                std::time::UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 123_456_789);
+            let copied_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+            fs::File::open(source.as_path())
+                .unwrap()
+                .set_modified(source_time)
+                .unwrap();
+            fs::File::open(destination.as_path())
+                .unwrap()
+                .set_modified(copied_time)
+                .unwrap();
+            let entry = PlanEntry {
+                source: source.clone(),
+                relative_path: "source".into(),
+                metadata: LocalFs.stat(&source, false).unwrap(),
+                hardlink_to: None,
+            };
+            let record = TransferRecord {
+                source,
+                destination: destination.clone(),
+                metadata: LocalFs.stat(&destination, false).unwrap(),
+                created: true,
+                source_removed: false,
+            };
+            verify_move_entry(&LocalFs, &entry, &record, &JobControl::new()).unwrap();
+            if change != "timestamp" {
+                if change == "replacement" {
+                    fs::rename(destination.as_path(), fixture.path().join("original")).unwrap();
+                }
+                fs::write(destination.as_path(), b"changed").unwrap();
+                fs::File::open(destination.as_path())
+                    .unwrap()
+                    .set_modified(copied_time)
+                    .unwrap();
+            } else {
+                // Even changing the destination to the source's exact timestamp
+                // must fail once the verified destination has been recorded.
+                fs::File::open(destination.as_path())
+                    .unwrap()
+                    .set_modified(source_time)
+                    .unwrap();
+            }
+            let error =
+                verify_move_entry(&LocalFs, &entry, &record, &JobControl::new()).unwrap_err();
+            assert_eq!(
+                error.operation,
+                if change == "contents" {
+                    "verify copy"
+                } else {
+                    "verify move"
+                }
+            );
+        }
+    }
 
     #[test]
     fn permanent_delete_requires_exact_count_confirmation() {

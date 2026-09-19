@@ -1,5 +1,6 @@
 use dualpane_core::VPath;
 use dualpane_engine::*;
+use dualpane_vfs::{LocalFs, Vfs};
 use std::{
     fs,
     sync::{Arc, atomic::Ordering},
@@ -40,6 +41,126 @@ fn readable_nonseekable_sources_copy_and_verify_successfully() {
         .join();
     assert_eq!(summary.state, JobState::Done, "{summary:?}");
     assert_eq!(fs::read(destination.join("source.txt")).unwrap(), content);
+}
+
+#[test]
+fn verified_copies_and_moves_accept_coarse_destination_timestamps() {
+    for moving in [false, true] {
+        for directory in [false, true] {
+            let fixture = tempfile::tempdir().unwrap();
+            let source = fixture.path().join("source");
+            let destination = fixture.path().join("destination");
+            fs::create_dir(&destination).unwrap();
+            let file = if directory {
+                fs::create_dir_all(source.join("nested")).unwrap();
+                source.join("nested/file.txt")
+            } else {
+                source.clone()
+            };
+            let content = vec![b'N'; 128 * 1024];
+            fs::write(&file, &content).unwrap();
+            fs::File::open(&file)
+                .unwrap()
+                .set_modified(
+                    std::time::UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 123_456_789),
+                )
+                .unwrap();
+            let mut vfs = FaultFs::new(source.clone().into(), fixture.path().join("trash"));
+            vfs.coarse_timestamps = true;
+            vfs.cross_device = moving;
+            let engine = OperationEngine::new(Arc::new(vfs))
+                .with_journal_directory(fixture.path().join("journals"));
+            let sources = vec![source.clone().into()];
+            let target = destination.clone().into();
+            let handle = if moving {
+                engine.spawn_move(sources, target, ScanOptions::default(), options())
+            } else {
+                engine.spawn_copy(sources, target, ScanOptions::default(), options())
+            };
+            let summary = handle.join();
+            assert_eq!(summary.state, JobState::Done, "{summary:?}");
+            let copied = if directory {
+                destination.join("source/nested/file.txt")
+            } else {
+                destination.join("source")
+            };
+            assert_eq!(fs::read(&copied).unwrap(), content);
+            let modified = LocalFs
+                .stat(&copied.into(), false)
+                .unwrap()
+                .modified
+                .unwrap();
+            assert_eq!(modified.seconds, 1_700_000_000);
+            assert_eq!(modified.nanoseconds, 0);
+            assert_eq!(source.exists(), !moving);
+            assert!(
+                summary
+                    .outcome
+                    .transfers
+                    .iter()
+                    .all(|record| record.source_removed == moving)
+            );
+            assert_eq!(fs::read_dir(destination).unwrap().count(), 1);
+        }
+    }
+}
+
+#[test]
+fn coarse_timestamps_do_not_hide_corrupt_copies_or_changed_move_sources() {
+    for failure in [Failure::CorruptCopy, Failure::SourceChanged] {
+        let fixture = tempfile::tempdir().unwrap();
+        let source = fixture.path().join("source.txt");
+        let destination = fixture.path().join("destination");
+        fs::create_dir(&destination).unwrap();
+        let content = vec![b'N'; 128 * 1024];
+        fs::write(&source, &content).unwrap();
+        let mut vfs = FaultFs::new(source.clone().into(), fixture.path().join("trash"));
+        vfs.coarse_timestamps = true;
+        vfs.cross_device = true;
+        vfs.failure = Some(failure);
+        let triggered = Arc::clone(&vfs.triggered);
+        let engine = OperationEngine::new(Arc::new(vfs))
+            .with_journal_directory(fixture.path().join("journals"));
+        let summary = engine
+            .spawn_move(
+                vec![source.clone().into()],
+                destination.clone().into(),
+                ScanOptions::default(),
+                options(),
+            )
+            .join();
+        assert!(triggered.load(Ordering::SeqCst));
+        assert_eq!(summary.state, JobState::Failed, "{failure:?}: {summary:?}");
+        assert_eq!(fs::read(source).unwrap(), content);
+        let operation = if matches!(failure, Failure::CorruptCopy) {
+            assert_eq!(fs::read_dir(destination).unwrap().count(), 0);
+            "verify copy"
+        } else {
+            "verify move source"
+        };
+        assert!(
+            summary
+                .outcome
+                .errors
+                .iter()
+                .any(|e| e.operation == operation)
+        );
+        assert!(summary.outcome.transfers.iter().all(|r| !r.source_removed));
+    }
+}
+
+#[test]
+fn verification_still_detects_a_subsecond_source_timestamp_change() {
+    let fixture = tempfile::tempdir().unwrap();
+    let source = fixture.path().join("source.txt");
+    let destination = fixture.path().join("copy.txt");
+    fs::write(&source, b"unchanged bytes").unwrap();
+    fs::copy(&source, &destination).unwrap();
+    let mut vfs = FaultFs::new(source.clone().into(), fixture.path().join("trash"));
+    vfs.failure = Some(Failure::SourceChanged);
+    let error = verify_copy(&vfs, &source.into(), &destination.into()).unwrap_err();
+    assert!(vfs.triggered.load(Ordering::SeqCst));
+    assert_eq!(error.operation, "verify copy");
 }
 
 #[test]

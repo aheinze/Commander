@@ -1625,7 +1625,7 @@ pub fn remove_tree(vfs: &dyn Vfs, path: &VPath, kind: EntryKind) -> Result<(), J
         .map_err(|error| JobError::from_vfs(path.clone(), "remove", &error))
 }
 
-/// Verifies metadata and file contents before publication.
+/// Verifies file type, size, contents, and source stability before publication.
 pub fn verify_copy(vfs: &dyn Vfs, source: &VPath, destination: &VPath) -> Result<(), JobError> {
     verify_copy_controlled(vfs, source, destination, &JobControl::new())
 }
@@ -1650,10 +1650,10 @@ pub fn verify_copy_controlled(
         message: "destination differs from the source or source changed during verification"
             .to_owned(),
     };
-    if before.kind != copied.kind
-        || before.size != copied.size
-        || before.modified != copied.modified
-    {
+    // Metadata preservation is best-effort: destinations such as SFTP may round
+    // modification times to whole seconds. Verify the bytes independently, while
+    // still comparing the source's exact timestamp before and after reading it.
+    if before.kind != copied.kind || before.size != copied.size {
         return Err(differs());
     }
     if before.kind == EntryKind::File {
