@@ -58,6 +58,8 @@ mod remote;
 mod search_actions;
 mod search_view;
 mod secure_delete;
+#[cfg(test)]
+mod selection_navigation_tests;
 mod settings;
 mod shortcuts;
 mod shutdown;
@@ -924,6 +926,7 @@ struct PaneState {
     locations: BTreeMap<String, NavigationSession>,
     restore_names: Vec<String>,
     restore_paths: Vec<VPath>,
+    restore_marked: bool,
     restore_cursor: Option<String>,
     pending_reveal: Option<VPath>,
     reveal_epoch: u64,
@@ -1000,6 +1003,7 @@ impl PaneState {
             locations: session.locations.clone(),
             restore_names: Vec::new(),
             restore_paths: Vec::new(),
+            restore_marked: false,
             restore_cursor: None,
             pending_reveal: None,
             reveal_epoch: 0,

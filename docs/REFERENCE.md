@@ -96,8 +96,11 @@ file panes, the sidebar, menus, dialogs, and the inspector. All text in the file
 panes uses monospace, including names, metadata, headers, paths, tabs, and status
 labels in List, Grid, and Column views. Source previews and terminals also use
 monospace text. File and terminal tabs use compact rounded pills, fine outlines,
-and a soft active fill. Selections remain distinct from keyboard focus, and item
-counts appear once in each pane's status bar.
+and a soft active fill. Ordinary single selection follows keyboard focus in all
+three views. Ctrl/Shift-click, Shift+arrows, Insert/Shift+Space, Select All, and glob
+selection mark files for batch operations; those marks stay selected while focus
+moves, even when only one marked file remains. A plain click returns to ordinary
+selection. Item counts appear once in each pane's status bar.
 
 Light and dark appearances share the same layout. Automatic color themes continue
 to follow the desktop palette; the built-in palette uses neutral surfaces and a

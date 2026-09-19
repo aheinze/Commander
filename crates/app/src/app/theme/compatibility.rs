@@ -51,12 +51,12 @@ mod tests {
         assert!(!css.contains(":root {"));
         assert!(css.contains("@define-color window_bg_color @carelo_pane;"));
         assert!(css.contains("alpha(currentColor, 0.70)"));
-        assert!(css.contains("mix(@accent_bg_color, white, 0.12)"));
-        // Keep named-color conversion covered even when no component uses this mix.
+        // Keep mix conversions covered even when no component uses these forms.
         let named_mix = legacy_stylesheet(
-            ".example { color: color-mix(in srgb, var(--dialog-fg-color) 72%, var(--dialog-bg-color)); }",
+            ".example { color: color-mix(in srgb, var(--dialog-fg-color) 72%, var(--dialog-bg-color)); background: color-mix(in srgb, var(--accent-bg-color) 88%, white); }",
         );
         assert!(named_mix.contains("mix(@dialog_fg_color, @dialog_bg_color, 0.28)"));
+        assert!(named_mix.contains("mix(@accent_bg_color, white, 0.12)"));
     }
 
     #[test]

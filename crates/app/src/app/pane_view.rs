@@ -937,17 +937,36 @@ impl PaneWidgets {
         match state.view_mode {
             PaneViewMode::List => {
                 self.column_view.grab_focus();
+                if state.cursor_row < self.model.n_items() {
+                    self.column_view.scroll_to(
+                        state.cursor_row,
+                        None,
+                        gtk::ListScrollFlags::FOCUS,
+                        None,
+                    );
+                }
             }
             PaneViewMode::Grid => {
                 self.grid_view.grab_focus();
+                if state.cursor_row < self.model.n_items() {
+                    self.grid_view
+                        .scroll_to(state.cursor_row, gtk::ListScrollFlags::FOCUS, None);
+                }
             }
             PaneViewMode::Columns => {
-                if let Some(view) = state
-                    .active_miller_column()
-                    .and_then(|index| self.miller_columns.get(index))
-                    .and_then(|column| column.view.as_ref())
+                if let Some(index) = state.active_miller_column()
+                    && let Some(column) = self.miller_columns.get(index)
+                    && let Some(view) = column.view.as_ref()
                 {
                     view.grab_focus();
+                    if let Some(row) = state.miller_columns[index].selected_row
+                        && column
+                            .model
+                            .as_ref()
+                            .is_some_and(|model| row < model.n_items())
+                    {
+                        view.scroll_to(row, gtk::ListScrollFlags::FOCUS, None);
+                    }
                 } else {
                     self.miller_box.grab_focus();
                 }
@@ -1221,6 +1240,7 @@ impl PaneWidgets {
         self.git.render(state.git.info.as_ref());
         if self.rendered_view_mode != Some(state.view_mode) {
             self.rendered_view_mode = Some(state.view_mode);
+            self.rendered_cursor = None;
             self.view_stack
                 .set_visible_child_name(state.view_mode.name());
         }
@@ -1530,7 +1550,7 @@ impl PaneWidgets {
                 placeholder.append(&icon);
             }
             let message = gtk::Label::new(Some(if column.error.is_some() {
-                ""
+                "Couldn’t open this folder"
             } else if column.loading {
                 "Loading…"
             } else {
@@ -1541,7 +1561,8 @@ impl PaneWidgets {
             message.set_width_chars(1);
             message.set_justify(gtk::Justification::Center);
             placeholder.append(&message);
-            if column.error.is_some() {
+            if let Some(error) = &column.error {
+                message.add_css_class("miller-error-message");
                 let retry = gtk::Button::with_label("Try Again");
                 retry.set_halign(gtk::Align::Center);
                 let path = column.path.clone();
@@ -1550,6 +1571,29 @@ impl PaneWidgets {
                     AppMsg::MillerRetry(pane, column_index, path.clone())
                 });
                 placeholder.append(&retry);
+                let details = gtk::Button::with_label("Details");
+                details.add_css_class("flat");
+                details.add_css_class("miller-error-details");
+                details.set_halign(gtk::Align::Center);
+                let error = error.clone();
+                details.connect_clicked(move |button| {
+                    let Some(parent) = button.root().and_downcast::<gtk::Window>() else {
+                        return;
+                    };
+                    let dialog = AlertSheet::new(Some("Couldn’t open this folder"), Some(&error));
+                    dialog.add_response("copy", "Copy Details");
+                    dialog.add_response("close", "Close");
+                    dialog.set_default_response(Some("close"));
+                    dialog.set_close_response("close");
+                    let error = error.clone();
+                    dialog.connect_response(Some("copy"), move |_, _| {
+                        if let Some(display) = gdk::Display::default() {
+                            display.clipboard().set_text(&error);
+                        }
+                    });
+                    dialog.present(Some(&parent));
+                });
+                placeholder.append(&details);
             }
             let rows = Rc::new(MillerRows::default());
             let (model, view, scroll) = if let Some(listing) = column.listing.clone() {

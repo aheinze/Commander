@@ -43,6 +43,7 @@ impl PaneState {
     pub(super) fn clear_restore_selection(&mut self) {
         self.restore_names.clear();
         self.restore_paths.clear();
+        self.restore_marked = false;
     }
 
     /// Discard a branch without leaving a cancelled listing/filter marked busy.
@@ -329,8 +330,7 @@ impl AppModel {
             if let Some(column) = column {
                 self.set_miller_cursor(pane, column, row, false);
             } else {
-                state.cursor_row = row;
-                state.range_anchor = None;
+                self.set_cursor(pane, row, false);
             }
         }
     }
@@ -453,7 +453,7 @@ impl AppModel {
         } else {
             new
         };
-        let (target, keys, current_key) = {
+        let (target, keys, next_key) = {
             let column_state = &self.pane(pane).miller_columns[column];
             let Some(listing) = column_state.listing.as_ref() else {
                 return;
@@ -474,10 +474,10 @@ impl AppModel {
             } else {
                 Vec::new()
             };
-            let current_key = listing
-                .row(current as usize)
+            let next_key = listing
+                .row(new as usize)
                 .map(|entry| SelectionKey::for_entry(listing.parent(), entry));
-            (target, keys, current_key)
+            (target, keys, next_key)
         };
         let state = self.pane_mut(pane);
         if target.is_none() {
@@ -492,36 +492,25 @@ impl AppModel {
         if !keep_branch {
             state.truncate_miller_branch(column + 1);
         }
-        // A single clicked item follows the cursor; an explicit multi-selection
-        // remains marked while navigating inside its column.
-        if !extend
-            && current != new
-            && state.selection.len() == 1
-            && current_key
-                .as_ref()
-                .is_some_and(|key| state.selection.contains(key))
-        {
-            state.selection.clear();
-            state.selection_revision = state.selection_revision.wrapping_add(1);
-        }
         state.miller_columns[column].selected_row = Some(new);
         state.focus_miller_column(column);
         state.miller_focus = target;
         state.range_anchor = extend.then_some(anchor);
         if extend {
             state.selection.replace(keys);
-            state.selection_revision = state.selection_revision.wrapping_add(1);
-        } else if !state.selection.is_empty() {
+            state.selection.mark();
+        } else {
             // Moving into a child column leaves its parent's selection behind,
             // while keeping marked items within the column being navigated.
-            let before = state.selection.len();
             state.retain_miller_column_selection(column);
-            if state.selection.len() != before {
-                state.selection_revision = state.selection_revision.wrapping_add(1);
+            if let Some(key) = next_key {
+                state.selection.follow_cursor(key);
             }
         }
+        state.selection_revision = state.selection_revision.wrapping_add(1);
         state.clear_restore_selection();
         state.miller_revision = state.miller_revision.wrapping_add(1);
+        state.focus_files_epoch = state.focus_files_epoch.wrapping_add(1);
     }
 
     pub(super) fn move_miller_left(&mut self, pane: PaneId, sender: &ComponentSender<Self>) {
@@ -602,6 +591,9 @@ impl AppModel {
     }
 
     pub(super) fn set_cursor(&mut self, pane: PaneId, new: u32, extend: bool) {
+        let Some(key) = self.selection_key_at(pane, new) else {
+            return;
+        };
         let old = self.pane(pane).cursor_row;
         let anchor = if extend {
             self.pane(pane).range_anchor.unwrap_or(old)
@@ -622,8 +614,13 @@ impl AppModel {
         state.range_anchor = extend.then_some(anchor);
         if extend {
             state.selection.replace(keys);
-            state.selection_revision = state.selection_revision.wrapping_add(1);
+            state.selection.mark();
+        } else {
+            state.selection.follow_cursor(key);
         }
+        state.clear_restore_selection();
+        state.selection_revision = state.selection_revision.wrapping_add(1);
+        state.focus_files_epoch = state.focus_files_epoch.wrapping_add(1);
     }
 
     pub(super) fn toggle_cursor(&mut self, pane: PaneId) {
@@ -642,6 +639,10 @@ impl AppModel {
             .as_ref()
             .map_or(0, |listing| listing.len());
         let state = self.pane_mut(pane);
+        state.clear_restore_selection();
+        if !state.selection.is_marked() {
+            state.selection.clear();
+        }
         state.selection.toggle(key);
         state.selection_revision = state.selection_revision.wrapping_add(1);
         state.range_anchor = None;
@@ -680,6 +681,9 @@ impl AppModel {
         let state = self.pane_mut(pane);
         state.retain_miller_column_selection(column);
         state.clear_restore_selection();
+        if !state.selection.is_marked() {
+            state.selection.clear();
+        }
         state.selection.toggle(key);
         state.selection_revision = state.selection_revision.wrapping_add(1);
         state.range_anchor = None;
@@ -705,6 +709,7 @@ impl AppModel {
         let state = self.pane_mut(pane);
         state.clear_restore_selection();
         state.selection.replace(keys);
+        state.selection.mark();
         state.selection_revision = state.selection_revision.wrapping_add(1);
     }
 
@@ -742,6 +747,7 @@ impl AppModel {
         sender: &ComponentSender<Self>,
     ) {
         let state = self.pane_mut(pane);
+        state.clear_restore_selection();
         state.selection = selection;
         state.selection_revision = state.selection_revision.wrapping_add(1);
         if let Some(cursor_row) = cursor_row {

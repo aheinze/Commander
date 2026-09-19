@@ -349,6 +349,7 @@ impl AppModel {
                 state.selection.deselect(&key);
             }
         }
+        state.selection.mark();
         state.selection_revision = state.selection_revision.wrapping_add(1);
         state.glob_cancel = None;
         state.glob_open = false;

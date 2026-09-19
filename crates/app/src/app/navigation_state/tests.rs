@@ -269,45 +269,51 @@ fn native_paths_and_selections_survive_session_save_and_restore() {
         PaneViewMode::Grid,
         PaneViewMode::Columns,
     ] {
-        let mut pane = PaneState::from_session(
-            &PaneSession {
-                view_mode: mode,
-                ..PaneSession::default()
-            },
-            native.clone(),
-        );
-        pane.active_mut().listing = Some(Arc::clone(&listing));
-        pane.cursor_row = selected_row;
-        pane.selection.replace([SelectionKey::for_entry(
-            &native,
-            listing.row(selected_row as usize).unwrap(),
-        )]);
-        if mode == PaneViewMode::Columns {
-            pane.miller_columns[0].listing = Some(Arc::clone(&listing));
-            pane.miller_columns[0].selected_row = Some(selected_row);
-        }
-        let saved = pane.to_session();
-        // Exercise the real on-disk serializer, including encoded map keys and names.
-        let text = toml_edit::ser::to_string_pretty(&saved).unwrap();
-        let decoded: PaneSession = toml_edit::de::from_str(&text).unwrap();
-        assert_eq!(saved, decoded);
-        let mut restored = PaneState::from_session(&decoded, VPath::from("/tmp"));
-        assert_eq!(restored.active().path, native);
-        restored.active_mut().listing = Some(Arc::clone(&listing));
-        if mode == PaneViewMode::Columns {
-            assert_eq!(restored.miller_columns[0].path, native);
-            assert_eq!(
-                restored.miller_columns[0].restore_name.as_ref(),
-                Some(&names[1])
+        for marked in [false, true] {
+            let mut pane = PaneState::from_session(
+                &PaneSession {
+                    view_mode: mode,
+                    ..PaneSession::default()
+                },
+                native.clone(),
             );
-            restored.miller_columns[0].listing = Some(Arc::clone(&listing));
+            pane.active_mut().listing = Some(Arc::clone(&listing));
+            pane.cursor_row = selected_row;
+            pane.selection.replace([SelectionKey::for_entry(
+                &native,
+                listing.row(selected_row as usize).unwrap(),
+            )]);
+            if mode == PaneViewMode::Columns {
+                pane.miller_columns[0].listing = Some(Arc::clone(&listing));
+                pane.miller_columns[0].selected_row = Some(selected_row);
+            }
+            if marked {
+                pane.selection.mark();
+            }
+            let saved = pane.to_session();
+            // Exercise the real on-disk serializer, including encoded map keys and names.
+            let text = toml_edit::ser::to_string_pretty(&saved).unwrap();
+            let decoded: PaneSession = toml_edit::de::from_str(&text).unwrap();
+            assert_eq!(saved, decoded);
+            let mut restored = PaneState::from_session(&decoded, VPath::from("/tmp"));
+            assert_eq!(restored.active().path, native);
+            restored.active_mut().listing = Some(Arc::clone(&listing));
+            if mode == PaneViewMode::Columns {
+                assert_eq!(restored.miller_columns[0].path, native);
+                assert_eq!(
+                    restored.miller_columns[0].restore_name.as_ref(),
+                    Some(&names[1])
+                );
+                restored.miller_columns[0].listing = Some(Arc::clone(&listing));
+            }
+            restored.restore_selection();
+            assert_eq!(restored.cursor_row, selected_row);
+            assert_eq!(restored.selection.is_marked(), marked);
+            assert_eq!(restored.selection.len(), 1);
+            assert!(restored.selection.contains(&SelectionKey::for_entry(
+                &native,
+                listing.row(selected_row as usize).unwrap()
+            )));
         }
-        restored.restore_selection();
-        assert_eq!(restored.cursor_row, selected_row);
-        assert_eq!(restored.selection.len(), 1);
-        assert!(restored.selection.contains(&SelectionKey::for_entry(
-            &native,
-            listing.row(selected_row as usize).unwrap()
-        )));
     }
 }

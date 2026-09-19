@@ -21,6 +21,28 @@ impl AppModel {
         let pane = self.active_pane;
         let was_columns = self.pane(pane).view_mode == PaneViewMode::Columns;
         let path = self.pane(pane).current_directory().clone();
+        let state = self.pane(pane);
+        let cursor_name = if was_columns {
+            state.miller_columns.last().and_then(|column| {
+                Some(
+                    column
+                        .listing
+                        .as_ref()?
+                        .row(column.selected_row? as usize)?
+                        .name()
+                        .to_os_string(),
+                )
+            })
+        } else {
+            state.active().listing.as_ref().and_then(|listing| {
+                Some(
+                    listing
+                        .row(state.cursor_row as usize)?
+                        .name()
+                        .to_os_string(),
+                )
+            })
+        };
         self.pane_mut(pane).remember_navigation();
         let reroot = mode != PaneViewMode::Columns && path != self.pane(pane).active().path;
         if reroot {
@@ -30,9 +52,39 @@ impl AppModel {
         self.pane_mut(pane).view_mode = mode;
         if mode == PaneViewMode::Columns {
             self.sync_miller_root(pane);
+            if !was_columns && let Some(name) = cursor_name.as_ref() {
+                let row = self
+                    .pane(pane)
+                    .miller_columns
+                    .first()
+                    .and_then(|column| column.listing.as_ref())
+                    .and_then(|listing| listing.rows().position(|entry| entry.name() == name));
+                if let Some(row) = row {
+                    self.set_miller_cursor(pane, 0, row as u32, false);
+                }
+            }
         }
         if reroot || (was_columns && mode != PaneViewMode::Columns) {
-            self.start_listing(pane, sender);
+            // The list/grid cursor is independent of Miller column cursors.
+            // Resolve the same filename when the destination listing is ready.
+            self.pane_mut(pane).restore_cursor =
+                cursor_name.as_deref().map(crate::session::stored_name);
+            if !reroot
+                && !self.pane(pane).loading
+                && !self.pane(pane).filtering
+                && self
+                    .pane(pane)
+                    .active()
+                    .listing
+                    .as_ref()
+                    .is_some_and(|listing| listing.is_complete())
+            {
+                // Both layouts already share this complete root listing. Keeping
+                // it avoids resetting GTK's focus during a needless reload.
+                self.pane_mut(pane).restore_selection();
+            } else {
+                self.start_listing(pane, sender);
+            }
         }
         self.focus_active_files();
         self.start_preview(sender);

@@ -18,6 +18,10 @@
 @define-color carelo_selected_text @carelo_text;
 /* Text on a solid accent fill; palettes with pastel accents flip this to dark. */
 @define-color carelo_on_accent #ffffff;
+/* Shared primary actions stay quiet and legible, including with pastel accents. */
+@define-color carelo_action mix(@carelo_accent, #000000, 0.60);
+@define-color carelo_action_hover mix(@carelo_accent, #000000, 0.55);
+@define-color carelo_action_text #ffffff;
 @define-color carelo_menu @carelo_toolbar;
 @define-color carelo_menu_control @carelo_control;
 @define-color carelo_menu_border @carelo_hairline;
@@ -307,6 +311,36 @@ paned > separator:hover {
   padding: 4px 10px 10px 10px;
 }
 
+.sidebar-section-card {
+  margin-top: 6px;
+  padding: 4px;
+  border: 1px solid alpha(@carelo_text, 0.05);
+  border-radius: 8px;
+  background: mix(@carelo_sidebar, @carelo_pane, 0.70);
+  box-shadow: none;
+}
+
+.sidebar-section-card > .sidebar-heading-row {
+  margin: 0;
+}
+
+.sidebar-section-card > .sidebar-heading-row .sidebar-group-toggle {
+  padding: 0 5px;
+}
+
+.sidebar-section-card > .sidebar-heading-row .sidebar-heading-action {
+  margin-right: 0;
+}
+
+.sidebar-section-card .sidebar-row {
+  padding-left: 5px;
+  padding-right: 5px;
+}
+
+.sidebar-section-card .sidebar-empty {
+  margin: 4px 5px 6px;
+}
+
 /* Slim overlay scrollbar: the sidebar is narrow, the track should not cost width. */
 .sidebar-scroller scrollbar {
   background: transparent;
@@ -446,8 +480,14 @@ paned > separator:hover {
 
 .sidebar-empty {
   margin: 1px 9px 3px 9px;
-  color: alpha(@carelo_faint, 0.85);
+  color: @carelo_muted;
   font-size: 11px;
+}
+
+/* Native dim-label opacity must not dim an already-muted text color again. */
+.sidebar-surface label.dim-label {
+  color: @carelo_muted;
+  opacity: 1;
 }
 
 /* Trash sits outside the scroll area so it is always one click away. */
@@ -1201,6 +1241,16 @@ paned > separator:hover {
 .miller-placeholder {
   padding: 20px;
   color: @carelo_faint;
+}
+
+.miller-error-message {
+  color: @carelo_muted;
+}
+
+.miller-error-details {
+  color: @carelo_muted;
+  background: transparent;
+  font-size: 12px;
 }
 
 .pane-status {
@@ -2081,7 +2131,7 @@ dialog.command-palette-dialog sheet {
 .remote-form { padding-bottom: 8px; }
 .remote-form entry, .remote-form passwordentry, .remote-form dropdown > button { min-height: 30px; }
 .remote-field-label { font-size: 12px; color: alpha(currentColor, 0.72); }
-.remote-form-caption { font-size: 11px; color: alpha(currentColor, 0.55); }
+.remote-form-caption { font-size: 12px; color: @carelo_muted; }
 .remote-auth { margin-top: 4px; }
 
 .remote-list {
@@ -2277,15 +2327,15 @@ dialog.command-palette-dialog sheet {
   padding: 0 14px;
   border: 0;
   border-radius: 4px;
-  color: var(--accent-fg-color);
-  background: var(--accent-bg-color);
+  color: @carelo_action_text;
+  background: @carelo_action;
   box-shadow: none;
   font-size: 12.5px;
   font-weight: 600;
 }
 
 .search-run:hover {
-  background: color-mix(in srgb, var(--accent-bg-color) 88%, white);
+  background: @carelo_action_hover;
 }
 
 .search-advanced {
@@ -2698,7 +2748,8 @@ dialog check:checked {
 
 dialog label.dim-label,
 dialog .dialog-hint {
-  color: color-mix(in srgb, currentColor 55%, transparent);
+  color: @carelo_muted;
+  opacity: 1;
   font-size: 12px;
   line-height: 1.4;
 }
@@ -2778,17 +2829,21 @@ dialog .dialog-hint {
   background: color-mix(in srgb, currentColor 13%, transparent);
 }
 
+button.suggested-action,
 .dialog-actions button:not(.context-menu-item).suggested-action,
 .utility-dialog .dialog-button.suggested-action,
-.tools-dialog .tool-button.suggested-action {
-  color: var(--accent-fg-color);
-  background: var(--accent-bg-color);
+.tools-dialog .tool-button.suggested-action,
+.utility-dialog .file-tools button.suggested-action {
+  color: @carelo_action_text;
+  background: @carelo_action;
 }
 
+button.suggested-action:hover,
 .dialog-actions button:not(.context-menu-item).suggested-action:hover,
 .utility-dialog .dialog-button.suggested-action:hover,
-.tools-dialog .tool-button.suggested-action:hover {
-  background: color-mix(in srgb, var(--accent-bg-color) 88%, white);
+.tools-dialog .tool-button.suggested-action:hover,
+.utility-dialog .file-tools button.suggested-action:hover {
+  background: @carelo_action_hover;
 }
 
 .dialog-actions button:not(.context-menu-item).destructive-action {
@@ -3003,20 +3058,6 @@ image.commander-file-icon.icon-muted { color: @carelo_icon; }
 .settings-dialog label link:visited,
 .settings-dialog label link:hover {
   color: mix(@carelo_accent, @carelo_text, 0.45);
-}
-
-/* Even a white custom accent stays below #737373 under white action text. */
-.settings-dialog .dialog-actions button:not(.context-menu-item).suggested-action,
-.shortcut-capture-dialog .dialog-actions button:not(.context-menu-item).suggested-action,
-.utility-dialog .file-tools button.suggested-action {
-  color: #ffffff;
-  background: mix(@carelo_accent, #000000, 0.60);
-}
-
-.settings-dialog .dialog-actions button:not(.context-menu-item).suggested-action:hover,
-.shortcut-capture-dialog .dialog-actions button:not(.context-menu-item).suggested-action:hover,
-.utility-dialog .file-tools button.suggested-action:hover {
-  background: mix(@carelo_accent, #000000, 0.55);
 }
 
 /* File tools extend the shared utility controls and native panel rows. */

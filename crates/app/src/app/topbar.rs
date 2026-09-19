@@ -34,6 +34,7 @@ pub(super) struct TopBarWidgets {
     view_icon: gtk::Box,
     rendered_view: Option<PaneViewMode>,
     pub(super) view_buttons: [gtk::ToggleButton; 3],
+    pub(super) hidden_toggle: gtk::ToggleButton,
     hidden: gtk::ToggleButton,
     sidebar: gtk::ToggleButton,
     panels: gtk::ToggleButton,
@@ -326,7 +327,7 @@ impl TopBarWidgets {
         }
         section(&view_items, "Visibility");
         let hidden = toggle_row(
-            view_toggle_button("commander-eye-symbolic", "Show hidden files"),
+            view_toggle_button("commander-folder-dot-symbolic", "Show hidden files"),
             "Show hidden files",
         );
         connect_button(hidden.upcast_ref(), sender, || {
@@ -340,6 +341,23 @@ impl TopBarWidgets {
         });
         view_items.append(&hidden);
         trailing.append(&view_menu);
+
+        let hidden_toggle = view_toggle_button(
+            "commander-folder-dot-symbolic",
+            "Show hidden files and folders",
+        );
+        hidden_toggle.add_css_class("flat");
+        hidden_toggle.add_css_class("toolbar-icon");
+        connect_button(hidden_toggle.upcast_ref(), sender, || {
+            AppMsg::ExecuteCommand(CommandId::ToggleHidden)
+        });
+        commands.push(CommandControl {
+            widget: hidden_toggle.clone().upcast(),
+            command: CommandId::ToggleHidden,
+            label: "Show hidden files and folders",
+            shortcut: None,
+        });
+        trailing.append(&hidden_toggle);
 
         let (layout_menu, layout_label, _, _, layout_items) =
             menu("Layout", "commander-columns-2-symbolic");
@@ -532,6 +550,7 @@ impl TopBarWidgets {
             view_icon,
             rendered_view: None,
             view_buttons: [list, grid, columns],
+            hidden_toggle,
             hidden,
             sidebar,
             panels,
@@ -550,9 +569,9 @@ impl TopBarWidgets {
     }
 
     pub(super) fn apply_layout(&self, width: i32) {
-        let layout = if width >= 1_000 {
+        let layout = if width >= 1_100 {
             0
-        } else if width >= 600 {
+        } else if width >= 700 {
             1
         } else {
             2
@@ -569,6 +588,8 @@ impl TopBarWidgets {
         for label in &self.menu_labels {
             label.set_visible(layout < 2);
         }
+        // The breadcrumb still identifies the folder when the bar becomes icon-only.
+        self.location.set_visible(layout < 2);
         let inline = layout == 0;
         // Three equal regions guarantee centering and prevent either side from
         // taking the filter's space. The title ellipsizes within its region.
@@ -693,6 +714,7 @@ impl TopBarWidgets {
                 .set_tooltip_text(Some(&format!("View options · {label}")));
         }
         self.hidden.set_active(state.show_hidden);
+        self.hidden_toggle.set_active(state.show_hidden);
         self.sidebar.set_active(model.sidebar_visible);
         self.panels.set_active(model.dual_pane);
         self.terminal.set_active(model.terminal_visible);

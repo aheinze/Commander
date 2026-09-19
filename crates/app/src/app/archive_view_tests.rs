@@ -179,7 +179,14 @@ fn gtk_archive_selected_folder_beside_it_and_round_trip_all_contents() {
     app.emit(AppMsg::MoveCursorHorizontal(1, false));
     wait_until(|| app.model().pane(PaneId::Left).active_miller_column() == Some(1));
     app.emit(AppMsg::InvertSelectionActive);
-    wait_until(|| app.model().pane(PaneId::Left).selection.len() == 50);
+    // Entering the child follows its cursor with an ordinary selection. Invert
+    // marks every other item, excluding that selected file.
+    wait_until(|| app.model().pane(PaneId::Left).selection.len() == 49);
+    assert!(
+        !app.model()
+            .operation_sources(PaneId::Left)
+            .contains(&VPath::from(source.join("payload-47.bin")))
+    );
     assert!(
         app.model()
             .operation_sources(PaneId::Left)

@@ -210,6 +210,7 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
         assert!(widgets.topbar.view_menu.is_visible());
         assert!(widgets.topbar.layout_menu.is_visible());
         assert!(widgets.topbar.more_menu.is_visible());
+        assert!(widgets.topbar.hidden_toggle.is_visible());
         let minimum = widgets
             .topbar
             .root
@@ -471,7 +472,7 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
     std::fs::write(albums.join(".hidden-note"), b"hidden").unwrap();
     app.emit(AppMsg::Refresh(PaneId::Left));
     wait_until(|| !app.model().pane(PaneId::Left).loading);
-    app.emit(AppMsg::ToggleHiddenActive);
+    app.widgets().topbar.hidden_toggle.emit_clicked();
     wait_until(|| {
         !app.model().pane(PaneId::Left).filtering
             && app.model().pane(PaneId::Left).miller_columns[1]
@@ -664,12 +665,68 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
             .is_some_and(|column| column.width == 360)
     });
     snapshot(app.widget(), "miller-error");
-    std::fs::set_permissions(&unavailable, std::fs::Permissions::from_mode(0o700)).unwrap();
-    app.emit(AppMsg::MillerRetry(
-        PaneId::Left,
-        1,
-        VPath::from(unavailable.as_path()),
+    let error = app.model().pane(PaneId::Left).miller_columns[1]
+        .error
+        .clone()
+        .unwrap();
+    let placeholder = app.widgets().panes[0].miller_columns[1].placeholder.clone();
+    assert!(has_label(
+        placeholder.upcast_ref(),
+        "Couldn’t open this folder"
     ));
+    for (appearance, name) in [
+        (AppearanceMode::Dark, "miller-error-details-dark"),
+        (AppearanceMode::Light, "miller-error-details-light"),
+    ] {
+        apply_appearance(appearance);
+        ux_tests::button(&placeholder, "Details")
+            .unwrap()
+            .emit_clicked();
+        wait_until(|| app.widget().visible_dialog().is_some());
+        let dialog = app.widget().visible_dialog().unwrap();
+        assert!(has_label(dialog.upcast_ref(), &error));
+        // Let the native sheet finish its opening animation before visual capture.
+        for _ in 0..4 {
+            drain_frames();
+        }
+        snapshot(app.widget(), name);
+        ux_tests::button(&dialog, "Copy Details")
+            .unwrap()
+            .emit_clicked();
+        wait_until(|| app.widget().visible_dialog().is_none());
+        let copied = glib::MainContext::default()
+            .block_on(
+                gdk::Display::default()
+                    .unwrap()
+                    .clipboard()
+                    .read_text_future(),
+            )
+            .unwrap();
+        assert_eq!(copied.as_deref(), Some(error.as_str()));
+        assert!(has_label(
+            placeholder.upcast_ref(),
+            "Couldn’t open this folder"
+        ));
+    }
+    app.emit(AppMsg::MillerResize(
+        PaneId::Left,
+        unavailable.as_path().into(),
+        220,
+    ));
+    wait_until(|| app.model().pane(PaneId::Left).miller_columns[1].width == 220);
+    drain_frames();
+    snapshot(app.widget(), "miller-error-narrow-light");
+    app.emit(AppMsg::MillerResize(
+        PaneId::Left,
+        unavailable.as_path().into(),
+        360,
+    ));
+    wait_until(|| app.model().pane(PaneId::Left).miller_columns[1].width == 360);
+    apply_appearance(AppearanceMode::Dark);
+    std::fs::set_permissions(&unavailable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    ux_tests::button(&placeholder, "Try Again")
+        .unwrap()
+        .emit_clicked();
     wait_until(|| {
         app.model()
             .pane(PaneId::Left)
@@ -678,6 +735,17 @@ fn gtk_miller_navigation_selection_resize_and_focus() {
             .is_some_and(|column| column.listing.is_some())
     });
     assert_eq!(app.model().pane(PaneId::Left).miller_columns[1].width, 360);
+    assert!(
+        app.model().pane(PaneId::Left).miller_columns[1]
+            .error
+            .is_none()
+    );
+    assert!(!has_label(
+        app.widgets().panes[0].miller_columns[1]
+            .placeholder
+            .upcast_ref(),
+        "Couldn’t open this folder"
+    ));
     app.emit(AppMsg::MillerResize(
         PaneId::Left,
         VPath::from(unavailable.as_path()),
@@ -1252,14 +1320,41 @@ fn snapshot_popover(window: &adw::ApplicationWindow, popover: &gtk::Popover, nam
         .unwrap();
 }
 
+fn has_label(widget: &gtk::Widget, text: &str) -> bool {
+    if widget
+        .downcast_ref::<gtk::Label>()
+        .is_some_and(|label| label.text() == text)
+    {
+        return true;
+    }
+    let mut child = widget.first_child();
+    while let Some(widget) = child {
+        if has_label(&widget, text) {
+            return true;
+        }
+        child = widget.next_sibling();
+    }
+    false
+}
+
+#[track_caller]
 fn snapshot(window: &adw::ApplicationWindow, name: &str) {
     let Some(directory) = std::env::var_os("COMMANDER_MILLER_SNAPSHOT_DIR") else {
         return;
     };
     let widget = gtk::prelude::GtkWindowExt::child(window).unwrap();
-    let snapshot = gtk::Snapshot::new();
-    widget.parent().unwrap().snapshot_child(&widget, &snapshot);
-    let node = snapshot.to_node().unwrap();
+    // A resize or theme change can invalidate the allocation between messages.
+    // Wait for a rendered frame instead of snapshotting that transient state.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let node = loop {
+        drain_frames();
+        let snapshot = gtk::Snapshot::new();
+        widget.parent().unwrap().snapshot_child(&widget, &snapshot);
+        if let Some(node) = snapshot.to_node() {
+            break node;
+        }
+        assert!(Instant::now() < deadline, "No rendered frame for {name}");
+    };
     window
         .renderer()
         .unwrap()

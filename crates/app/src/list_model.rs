@@ -103,6 +103,7 @@ mod imp {
             let keys =
                 (0..self.published_items.get()).filter_map(|position| self.selection_key(position));
             self.selection.borrow_mut().replace(keys);
+            self.selection.borrow_mut().mark();
             self.publish_selection(0, self.published_items.get(), None);
             true
         }
@@ -118,7 +119,9 @@ mod imp {
                 selection.select(key);
                 !unchanged
             } else {
-                selection.select(key)
+                let changed = selection.select(key);
+                selection.mark();
+                changed
             };
             drop(selection);
             if changed {
@@ -149,6 +152,7 @@ mod imp {
             for key in keys {
                 selection.select_preserving_anchor(key);
             }
+            selection.mark();
             let changed = *selection != previous;
             drop(selection);
             if changed {
@@ -183,6 +187,7 @@ mod imp {
                         }
                     }
                 }
+                replacement.mark();
                 let changed = *selection != replacement;
                 *selection = replacement;
                 drop(selection);
@@ -222,6 +227,7 @@ mod imp {
                     }
                 }
             }
+            selection.mark();
             drop(selection);
             let cursor_row = selected_row.or(changed_row).or(requested_selected_row);
             if changed {

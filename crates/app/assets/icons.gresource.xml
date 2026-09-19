@@ -46,6 +46,7 @@
     <file compressed="true" alias="scalable/actions/commander-files-symbolic.svg">icons/files.svg</file>
     <file compressed="true" alias="scalable/actions/commander-film-symbolic.svg">icons/film.svg</file>
     <file compressed="true" alias="scalable/actions/commander-folder-symbolic.svg">icons/folder.svg</file>
+    <file compressed="true" alias="scalable/actions/commander-folder-dot-symbolic.svg">icons/folder-dot.svg</file>
     <file compressed="true" alias="scalable/actions/commander-folder-open-symbolic.svg">icons/folder-open.svg</file>
     <file compressed="true" alias="scalable/actions/commander-folder-plus-symbolic.svg">icons/folder-plus.svg</file>
     <file compressed="true" alias="scalable/actions/commander-hard-drive-symbolic.svg">icons/hard-drive.svg</file>

@@ -79,6 +79,7 @@ pub struct FolderViewSession {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default)]
 pub struct NavigationSession {
+    pub selection_marked: bool,
     pub columns: Vec<String>,
     pub selected_names: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

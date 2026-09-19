@@ -145,6 +145,9 @@ impl PaneState {
         locations.insert(
             self.active().path.to_storage_string(),
             NavigationSession {
+                selection_marked: self.selection.is_marked()
+                    || ((!self.restore_names.is_empty() || !self.restore_paths.is_empty())
+                        && self.restore_marked),
                 columns: self
                     .miller_columns
                     .iter()
@@ -210,6 +213,7 @@ impl PaneState {
             .cloned()
             .unwrap_or_default();
         self.restore_names = navigation.selected_names;
+        self.restore_marked = navigation.selection_marked;
         self.restore_paths = navigation
             .selected_paths
             .iter()
@@ -293,6 +297,9 @@ impl PaneState {
                             .map(|entry| SelectionKey::for_entry(listing.parent(), entry))
                     }),
             );
+            if self.restore_marked {
+                self.selection.mark();
+            }
             self.clear_restore_selection();
             self.selection_revision = self.selection_revision.wrapping_add(1);
         }
@@ -325,6 +332,9 @@ impl PaneState {
                     .filter(|entry| names.contains(entry.name()))
                     .map(|entry| SelectionKey::for_entry(listing.parent(), entry)),
             );
+            if self.restore_marked {
+                self.selection.mark();
+            }
             self.clear_restore_selection();
             self.selection_revision = self.selection_revision.wrapping_add(1);
         }

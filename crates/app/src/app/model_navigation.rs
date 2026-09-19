@@ -309,6 +309,7 @@ impl AppModel {
             state.locations.insert(
                 previous.to_storage_string(),
                 NavigationSession {
+                    selection_marked: state.selection.is_marked(),
                     columns: vec![previous.to_storage_string()],
                     selected_names,
                     horizontal_scroll: 0,

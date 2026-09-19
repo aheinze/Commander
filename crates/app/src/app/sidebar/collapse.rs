@@ -99,6 +99,17 @@ impl CollapsibleGroup {
     }
 
     pub fn append_to(&self, parent: &gtk::Box) {
+        if matches!(
+            self.key.as_str(),
+            "favorites" | "devices" | "remotes" | "workspaces" | "recent"
+        ) {
+            let card = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            card.add_css_class("sidebar-section-card");
+            card.append(&self.heading);
+            card.append(&self.revealer);
+            parent.append(&card);
+            return;
+        }
         parent.append(&self.heading);
         parent.append(&self.revealer);
     }
